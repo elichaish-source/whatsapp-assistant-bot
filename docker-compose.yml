@@ -26,7 +26,8 @@ services:
         condition: service_healthy
 
   waha:
-    image: devlikeapro/waha:latest
+    # הגרסה תלויה בסוג המעבד של השרת: arm-... ל-Oracle (Arm), latest-... ל-x86
+    image: devlikeapro/waha:${WAHA_IMAGE_TAG:?חסר WAHA_IMAGE_TAG ב-.env}
     restart: unless-stopped
     environment:
       WAHA_API_KEY: ${WAHA_API_KEY:?חסר WAHA_API_KEY ב-.env}
