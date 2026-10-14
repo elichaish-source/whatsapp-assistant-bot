@@ -30,58 +30,68 @@
 ## התקנה על השרת
 
 השרת הראשי הוא Oracle Cloud בשכבה החינמית (מעבד Arm). Hetzner הוא גיבוי.
-ב-Oracle המשתמש בשרת הוא `ubuntu`, וכל פקודה צריכה `sudo` בהתחלה. ב-Hetzner המשתמש הוא `root`.
+ב-Oracle המשתמש בשרת הוא `ubuntu`, וב-Hetzner הוא `root`.
 
-1. **התקן Docker** על השרת:
-   ```bash
-   curl -fsSL https://get.docker.com | sh
-   ```
-2. **הורד את הקוד:**
-   ```bash
-   git clone https://github.com/elichaish-source/whatsapp-assistant-bot.git
-   cd whatsapp-assistant-bot
-   ```
-3. **DuckDNS:** היכנס ל-[duckdns.org](https://www.duckdns.org), ודא שהתת-דומיין `elichay` קיים, והעתק את ה-token.
-4. **צור קובץ הגדרות:**
-   ```bash
-   cp .env.example .env
-   nano .env
-   ```
-   מלא את המספר שלך, את ה-token של DuckDNS ושלוש סיסמאות אקראיות. אפשר ליצור סיסמה כזו עם `openssl rand -hex 24`.
-   ב-`WAHA_IMAGE_TAG` בחר את הגרסה שמתאימה לשרת: `arm-...` ל-Oracle, `latest-...` ל-Hetzner.
-5. **פתח את פורטים 80 ו-443:**
-   - **ב-Oracle** צריך לפתוח בשני מקומות:
-     - בלוח הבקרה של Oracle: ברשת של השרת (VCN) ← Security Lists ← הוסף שני כללי Ingress מ-`0.0.0.0/0` לפורטים 80 ו-443 (TCP).
-     - על השרת עצמו:
-       ```bash
-       sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-       sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
-       sudo netfilter-persistent save
-       ```
-   - **ב-Hetzner:** רק אם הגדרת חומת אש בלוח הבקרה, הוסף בה את פורטים 80 ו-443.
-6. **הרץ:**
-   ```bash
-   docker compose up -d --build
-   ```
-7. **חבר את הוואטסאפ (פעם אחת):**
-   - מהמחשב שלך, פתח מנהרה לשרת:
-     ```bash
-     ssh -L 3000:localhost:3000 ubuntu@<כתובת-השרת>
-     ```
-     (ב-Hetzner: `root` במקום `ubuntu`.)
-   - פתח בדפדפן `http://localhost:3000/dashboard` והתחבר עם המשתמש `admin` והסיסמה `WAHA_DASHBOARD_PASSWORD`.
-   - אם הדשבורד של WAHA מבקש מפתח API, הזן את `WAHA_API_KEY`.
-   - בסשן `default`, סרוק את קוד ה-QR מהטלפון: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר.
-8. **היכנס לדשבורד:** פתח `https://elichay.duckdns.org`, הזן את המספר שלך, וקבל את הקוד ב"הודעה לעצמי".
+### לפני ההתקנה
+- **שרת Ubuntu 24.04** שאפשר להתחבר אליו ב-SSH.
+- **פורטים 80 ו-443 פתוחים בלוח הבקרה.**
+  - ב-Oracle: ברשת של השרת (VCN) ← Subnet ← Security List ← הוסף כלל Ingress מ-`0.0.0.0/0`, ‏TCP, לפורטים `80,443`.
+  - ב-Hetzner: רק אם הגדרת חומת אש.
+- **תת-דומיין ב-[DuckDNS](https://www.duckdns.org)** (`elichay`), וה-token של החשבון.
+
+### 1. מפתח פריסה: הרשאת קריאה למאגר
+המאגר פרטי, ולכן השרת צריך מפתח משלו. על השרת:
+```bash
+ssh-keygen -t ed25519 -N "" -C "assistant-server" -f ~/.ssh/github_deploy
+printf 'Host github.com\n  IdentityFile ~/.ssh/github_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+cat ~/.ssh/github_deploy.pub
+```
+העתק את השורה שהוצגה (מתחילה ב-`ssh-ed25519`). ב-GitHub: המאגר ← **Settings** (הגדרות) ← **Deploy keys** (מפתחות פריסה) ← **Add deploy key** (הוספת מפתח). שם: `server`. הדבק את השורה, **אל תסמן** "Allow write access" (הרשאת כתיבה), ולחץ **Add key**.
+
+### 2. הורדת הקוד והתקנה
+```bash
+git clone git@github.com:elichaish-source/whatsapp-assistant-bot.git
+cd whatsapp-assistant-bot
+./scripts/install.sh
+```
+הסקריפט שואל שתי שאלות: מספר הוואטסאפ וה-token של DuckDNS. כל השאר אוטומטי:
+- התקנת Docker ופתיחת פורטים 80 ו-443 על השרת.
+- יצירת סיסמאות אקראיות ובחירת גרסת WAHA לפי סוג המעבד.
+- הפעלת המערכת וגיבוי יומי של בסיס הנתונים ב-03:15, לפי שעון ישראל.
+
+### 3. חיבור הוואטסאפ (פעם אחת)
+- מהמחשב, פתח מנהרה לשרת:
+  ```bash
+  ssh -L 3000:localhost:3000 ubuntu@<כתובת-השרת>
+  ```
+- פתח בדפדפן `http://localhost:3000/dashboard`. משתמש: `admin`. את הסיסמה רואים על השרת בפקודה `grep WAHA_ .env`.
+- אם הדשבורד של WAHA מבקש מפתח API, הזן את `WAHA_API_KEY` מאותה פקודה.
+- בסשן `default`, סרוק את קוד ה-QR מהטלפון: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר.
+
+### 4. כניסה לדשבורד
+פתח `https://elichay.duckdns.org`, הזן את המספר שלך, וקבל את הקוד ב"הודעה לעצמי".
 
 ### עדכון לגרסה חדשה
-
 ```bash
-git pull
-docker compose up -d --build
+cd ~/whatsapp-assistant-bot && ./scripts/update.sh
 ```
+הסקריפט מוריד את הקוד, מגבה ומפעיל מחדש. המיגרציות של בסיס הנתונים רצות אוטומטית.
 
-המיגרציות של בסיס הנתונים רצות אוטומטית כשהשרת עולה.
+### גיבוי ושחזור
+- הגיבויים נשמרים ב-`backups/`. נשמרים 14 הגיבויים האחרונים.
+- גיבוי ידני: `sudo ./scripts/backup.sh`
+- **הגיבויים יושבים על אותו שרת.** אם השרת נמחק, גם הם נמחקים. מדי פעם כדאי להעתיק אותם למחשב:
+  ```bash
+  scp -r ubuntu@<כתובת-השרת>:whatsapp-assistant-bot/backups .
+  ```
+- שחזור מגיבוי. ⚠️ **מוחק את כל המידע הנוכחי** ומחליף אותו בתוכן הגיבוי:
+  ```bash
+  sudo docker compose stop backend
+  sudo docker compose exec -T db psql -U assistant assistant -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+  gunzip -c backups/<קובץ>.sql.gz | sudo docker compose exec -T db psql -U assistant assistant
+  sudo docker compose start backend
+  ```
 
 ## פיתוח מקומי
 

@@ -25,6 +25,7 @@
 - **דשבורד:** React + Vite + TypeScript, בעברית ומימין לשמאל (`frontend/`).
 - **שרת הרצה:** Oracle Cloud חינמי (מעבד Arm), עם Hetzner כגיבוי. כל רכיב חייב לעבוד גם על Arm וגם על x86.
 - **הרצה:** Docker Compose עם השירותים: db, ‏backend, ‏waha, ‏caddy (מגיש את הדשבורד עם HTTPS) ו-duckdns.
+- **סקריפטים לשרת** (`scripts/`): `install.sh` להתקנה, `update.sh` לעדכון, `backup.sh` לגיבוי יומי.
 - **הערות בקוד** בעברית. שמות משתנים, פונקציות וקבצים באנגלית.
 
 ## בדיקות
