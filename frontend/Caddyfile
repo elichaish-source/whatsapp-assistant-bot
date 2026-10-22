@@ -15,6 +15,11 @@
 
 	handle {
 		root * /srv
+
+		# ‏Caddy לא מכיר את הסיומת webmanifest, והדפדפן מצפה לסוג התוכן הזה
+		@manifest path /manifest.webmanifest
+		header @manifest Content-Type "application/manifest+json"
+
 		try_files {path} /index.html
 		file_server
 	}

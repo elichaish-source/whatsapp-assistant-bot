@@ -226,8 +226,11 @@ button:disabled {
   cursor: pointer;
 }
 
-.card.clickable:hover {
-  border-color: var(--primary);
+/* רק במכשירים עם עכבר. במסך מגע ה-hover "נתקע" על הכרטיס האחרון שנגעו בו */
+@media (hover: hover) {
+  .card.clickable:hover {
+    border-color: var(--primary);
+  }
 }
 
 .card.inactive {
@@ -492,4 +495,70 @@ label.check.small {
 
 .grow {
   flex: 1;
+}
+
+/* --- מובייל ואפליקציה מותקנת --- */
+
+/* ‏100dvh מתכווץ ומתרחב יחד עם סרגל הכתובת של הדפדפן, ולכן אין קפיצה בגלילה */
+.layout,
+.center {
+  min-height: 100dvh;
+}
+
+/* שטחי בטיחות במכשירים עם מגרעת. מורגש בעיקר כשהדשבורד מותקן כאפליקציה ואין סרגל דפדפן */
+.topbar {
+  padding-top: calc(10px + env(safe-area-inset-top));
+  padding-left: calc(16px + env(safe-area-inset-left));
+  padding-right: calc(16px + env(safe-area-inset-right));
+}
+
+.content {
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+  padding-left: calc(20px + env(safe-area-inset-left));
+  padding-right: calc(20px + env(safe-area-inset-right));
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--primary);
+}
+
+/* ההדגשה הכחולה של אנדרואיד מוחלפת במשוב נגיעה משלנו */
+button,
+.sidebar a,
+.card.clickable {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:active,
+.card.clickable:active {
+  opacity: 0.7;
+}
+
+@media (max-width: 720px) {
+  /* ‏iOS מקרב את כל הדף כשנוגעים בשדה שהגופן בו קטן מ-16px */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* אזור נגיעה של 44 פיקסלים לפחות, כהמלצת אפל וגוגל */
+  button,
+  select,
+  .sidebar a,
+  input:not([type="checkbox"]):not([type="radio"]) {
+    min-height: 44px;
+  }
+
+  .icon-btn,
+  .link-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* בלי זה כפתורי הפעולה נדחסים לשורה אחת וגולשים מהמסך */
+  .actions {
+    flex-wrap: wrap;
+  }
 }
