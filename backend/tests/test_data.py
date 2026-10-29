@@ -19,6 +19,32 @@ def test_client_with_multiple_families(client):
     assert only == []
 
 
+def test_client_tax_id_and_address(client):
+    fam = _ids(client, "/api/client-families")
+    r = client.post(
+        "/api/clients",
+        json={
+            "name": 'ארץ זרועה ע"ר',
+            "family_ids": [fam["עסק פרטי"]],
+            "tax_id": "580743375",
+            "address": "שדה אליהו",
+        },
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["tax_id"] == "580743375"
+    assert body["address"] == "שדה אליהו"
+
+    # שדה שמגיע ריק נשמר כ-null ולא כמחרוזת ריקה
+    r = client.put(
+        f"/api/clients/{body['id']}",
+        json={"name": body["name"], "family_ids": [fam["עסק פרטי"]], "tax_id": "  ", "address": ""},
+    )
+    assert r.status_code == 200
+    assert r.json()["tax_id"] is None
+    assert r.json()["address"] is None
+
+
 def test_clients_domain_requires_client(client):
     dom = _ids(client, "/api/domains")
     r = client.post("/api/tasks", json={"title": "להתקשר", "domain_id": dom["לקוחות"]})

@@ -77,6 +77,12 @@ export default function ClientDetail() {
             מייל: <span dir="ltr">{client.email}</span>
           </div>
         )}
+        {client.tax_id && (
+          <div>
+            ת"ז / ח"פ: <span dir="ltr">{client.tax_id}</span>
+          </div>
+        )}
+        {client.address && <div>כתובת: {client.address}</div>}
         {client.notes && <div className="notes">{client.notes}</div>}
       </div>
 
