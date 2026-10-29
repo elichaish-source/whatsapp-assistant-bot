@@ -17,6 +17,8 @@ export default function ClientForm({
     name: client?.name ?? "",
     phone: client?.phone ?? "",
     email: client?.email ?? "",
+    tax_id: client?.tax_id ?? "",
+    address: client?.address ?? "",
     notes: client?.notes ?? "",
     is_active: client?.is_active ?? true,
     family_ids: client?.families.map((f) => f.id) ?? [],
@@ -60,6 +62,14 @@ export default function ClientForm({
       <label>
         מייל
         <input type="email" dir="ltr" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+      </label>
+      <label>
+        ת"ז / ח"פ
+        <input dir="ltr" value={form.tax_id} onChange={(e) => setForm({ ...form, tax_id: e.target.value })} />
+      </label>
+      <label>
+        כתובת
+        <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
       </label>
       <fieldset className="full">
         <legend>משפחות לקוחות</legend>

@@ -79,6 +79,10 @@ class Client(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(30))
     email: Mapped[str | None] = mapped_column(String(200))
+    # ת"ז של עוסק פטור או מורשה, או ח"פ של חברה ועמותה
+    tax_id: Mapped[str | None] = mapped_column(String(20))
+    # כתובת מלאה בשדה חופשי אחד: רחוב, יישוב ומיקוד
+    address: Mapped[str | None] = mapped_column(String(300))
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

@@ -13,6 +13,8 @@ export interface Client {
   name: string;
   phone: string | null;
   email: string | null;
+  tax_id: string | null;
+  address: string | null;
   notes: string | null;
   is_active: boolean;
   families: Lookup[];

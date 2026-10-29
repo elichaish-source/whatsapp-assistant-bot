@@ -56,11 +56,13 @@ class ClientIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     phone: str | None = None
     email: str | None = None
+    tax_id: str | None = Field(default=None, max_length=20)
+    address: str | None = Field(default=None, max_length=300)
     notes: str | None = None
     is_active: bool = True
     family_ids: list[int] = []
 
-    _clean = field_validator("phone", "email", "notes", mode="before")(_blank_to_none)
+    _clean = field_validator("phone", "email", "tax_id", "address", "notes", mode="before")(_blank_to_none)
 
 
 class ClientOut(ORMModel):
@@ -68,6 +70,8 @@ class ClientOut(ORMModel):
     name: str
     phone: str | None
     email: str | None
+    tax_id: str | None
+    address: str | None
     notes: str | None
     is_active: bool
     families: list[LookupOut]
