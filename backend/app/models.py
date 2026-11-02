@@ -121,8 +121,12 @@ class Task(TimestampMixin, Base):
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
     due_date: Mapped[date | None] = mapped_column(Date)
     reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # מתי התזכורת נשלחה בוואטסאפ. מונע שליחה כפולה
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     priority: Mapped[str] = mapped_column(String(10), default="normal", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    # נוצרה מהבוט בוואטסאפ ולא מהדשבורד
+    from_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 # --- כניסה לדשבורד ---
@@ -137,6 +141,33 @@ class LoginCode(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class BotMessage(Base):
+    """יומן ההודעות שהבוט טיפל בהן.
+
+    שתי תפקידים: מונע טיפול כפול באותה הודעה (WAHA שולח את ה-webhook שוב
+    כשהוא לא מקבל 200), ושומר את צריכת הטוקנים כדי שאפשר יהיה לראות עלות אמיתית.
+    """
+
+    __tablename__ = "bot_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # מזהה ההודעה של וואטסאפ, כפי שהוא מגיע ב-payload.id
+    wa_message_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text)
+    intent: Mapped[str | None] = mapped_column(String(40))
+    reply: Mapped[str | None] = mapped_column(Text)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
+    # המשימות שהוצגו בתשובה, לפי הסדר, מופרדות בפסיק. כך "סיימתי 3" יודע למה הכוונה
+    listed_task_ids: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    cached_tokens: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

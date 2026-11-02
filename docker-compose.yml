@@ -36,6 +36,13 @@ services:
       WHATSAPP_DEFAULT_ENGINE: WEBJS
       WHATSAPP_START_SESSION: default
       WHATSAPP_RESTART_ALL_SESSIONS: "True"
+      # הודעות נשלחות ל-backend ברשת הפנימית. מנויים לשני האירועים כי WAHA
+      # לא מבטיח איזה מהם נושא הודעה שנשלחה לעצמך; כפילות נחסמת לפי מזהה ההודעה
+      WHATSAPP_HOOK_URL: http://backend:8000/api/bot/webhook
+      WHATSAPP_HOOK_EVENTS: message,message.any
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_WEBHOOK_HMAC_KEY:-}
+      WHATSAPP_HOOK_RETRIES_POLICY: linear
+      WHATSAPP_HOOK_RETRIES_ATTEMPTS: "3"
     volumes:
       - waha-sessions:/app/.sessions
     # פתוח רק מהשרת עצמו (לסריקת QR דרך מנהרת SSH), לא מהאינטרנט

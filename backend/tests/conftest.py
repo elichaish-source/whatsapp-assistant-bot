@@ -9,6 +9,9 @@ if not TEST_DB:
 os.environ["DATABASE_URL"] = TEST_DB
 os.environ["OWNER_PHONE"] = "972501234567"
 os.environ["COOKIE_SECURE"] = "false"
+os.environ["WAHA_WEBHOOK_HMAC_KEY"] = "test-hmac-key"
+# ללא מפתח Claude, כך שאף בדיקה לא תקרא ל-API בתשלום
+os.environ["ANTHROPIC_API_KEY"] = ""
 
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
@@ -16,7 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app import waha  # noqa: E402
-from app.db import engine  # noqa: E402
+from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
 OWNER = "972501234567"
@@ -34,7 +37,10 @@ def migrated():
 def clean_db():
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE tasks, projects, client_family_links, clients, login_codes, auth_sessions RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE bot_messages, tasks, projects, client_family_links, clients,"
+                " login_codes, auth_sessions RESTART IDENTITY CASCADE"
+            )
         )
 
 
@@ -43,6 +49,15 @@ def sent(monkeypatch):
     messages = []
     monkeypatch.setattr(waha, "send_text", lambda phone, body: messages.append((phone, body)))
     return messages
+
+
+@pytest.fixture
+def db():
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 @pytest.fixture

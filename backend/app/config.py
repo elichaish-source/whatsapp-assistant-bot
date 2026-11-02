@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     waha_url: str = "http://waha:3000"
     waha_api_key: str = ""
     waha_session: str = "default"
+    # המפתח שבו WAHA חותם את ה-webhook (WHATSAPP_HOOK_HMAC_KEY). ריק = הבוט לא מקבל הודעות
+    waha_webhook_hmac_key: str = ""
+
+    # --- הבוט בוואטסאפ (שלב 2א) ---
+    anthropic_api_key: str = ""
+    claude_model: str = "claude-opus-5-5"
+    # עומק החשיבה של המודל: low, medium, high, xhigh, max. ברירת המחדל של Opus 5.5 היא medium
+    claude_effort: str = "low"
+    # כל כמה שניות נבדקות תזכורות שהגיע זמנן
+    reminder_poll_seconds: int = 30
 
     session_days: int = 30
     login_code_minutes: int = 5

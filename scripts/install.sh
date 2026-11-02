@@ -84,6 +84,7 @@ WAHA_IMAGE_TAG=$waha_tag
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 WAHA_API_KEY=$(openssl rand -hex 24)
 WAHA_DASHBOARD_PASSWORD=$(openssl rand -hex 12)
+WAHA_WEBHOOK_HMAC_KEY=$(openssl rand -hex 24)
 EOF
   ok "נוצר .env עם סיסמאות אקראיות (גרסת WAHA: $waha_tag)"
 fi

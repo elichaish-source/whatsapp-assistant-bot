@@ -9,6 +9,11 @@
 		-Server
 	}
 
+	# ה-webhook של WAHA מגיע ברשת הפנימית של Docker, ולא צריך להיות חשוף לאינטרנט
+	handle /api/bot/* {
+		respond 404
+	}
+
 	handle /api/* {
 		reverse_proxy backend:8000
 	}
