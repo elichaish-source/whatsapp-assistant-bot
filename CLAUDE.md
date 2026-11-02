@@ -16,7 +16,7 @@
 | שלב | נושא | מצב |
 |---|---|---|
 | 1 | תשתית, בסיס נתונים ודשבורד | ✅ **מותקן ופועל על השרת (22.10.2026)** |
-| 2א | בוט וואטסאפ: משימות ותזכורות | לא התחיל |
+| 2א | בוט וואטסאפ: משימות ותזכורות | 🔵 **הקוד נכתב ונבדק (1.11.2026), ממתין למיזוג.** ענף `feat/whatsapp-bot-tasks`. ⚠️ **אחרי המיזוג לא מספיק להריץ `update.sh`:** צריך להוסיף ל-`.env` בשרת שני מפתחות שלא קיימים בו, אחרת הבוט נשאר כבוי — `WAHA_WEBHOOK_HMAC_KEY` (מחרוזת אקראית, `openssl rand -hex 24`) ו-`ANTHROPIC_API_KEY` (מ-console.anthropic.com). בלי הראשון ה-webhook מחזיר 503 ולולאת התזכורות לא עולה; בלי השני הבוט עונה שלא הצליח לפענח |
 | 2ב | זיכרון מינימלי: עובדות מהוראה ישירה + יומן כתיבה־בלבד | אושר 22.10.2026, לא התחיל. ראה [SPEC-ASSISTANT.md](SPEC-ASSISTANT.md) |
 | 3 | כספים וקבלות | לא התחיל |
 | 4 | Gmail | לא התחיל |
@@ -58,3 +58,12 @@
 - **שרת:** `cd backend && TEST_DATABASE_URL=postgresql+psycopg://.../assistant_test pytest` (דורש PostgreSQL ריק לבדיקות).
 - **דשבורד:** `cd frontend && npm run build` (כולל בדיקת TypeScript).
 - **שינוי במבנה הנתונים:** תמיד דרך מיגרציה חדשה ב-`backend/alembic/versions/`.
+- ⚠️ **במחשב במשרד אין Python, אין Node ואין Docker** (‏`python` שם הוא רק קיצור הדרך של חנות Windows ולא מתורגמן אמיתי). לכן אי אפשר להריץ שם `pytest` או `npm run build`. **הדרך שעובדת — להריץ את הבדיקות על השרת במכולה חד-פעמית**, בלי לגעת בשירותים שרצים ובלי לפרוס קוד שלא מוזג:
+  ```bash
+  git clone -q --branch <ענף> --depth 1 https://github.com/elichaish-source/whatsapp-assistant-bot.git /root/test-tmp
+  docker exec -i whatsapp-assistant-bot-db-1 psql -U assistant -d assistant -c 'CREATE DATABASE assistant_test'
+  docker run --rm --network whatsapp-assistant-bot_default -v /root/test-tmp/backend:/app -w /app \
+    -e TEST_DATABASE_URL=postgresql+psycopg://assistant:<סיסמה מ-.env>@db:5432/assistant_test \
+    python:3.12-slim sh -c 'pip install -q -r requirements.txt -r requirements-dev.txt && python -m pytest -q'
+  ```
+  ‏`conftest.py` מריץ `downgrade base` ואז `upgrade head`, כך שגם המיגרציה נבדקת בשני הכיוונים. בסוף למחוק את `/root/test-tmp` ואת בסיס הנתונים `assistant_test`.
