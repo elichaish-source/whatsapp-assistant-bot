@@ -1,0 +1,5 @@
+# סקריפטים רצים על לינוקס. בלי זה Windows מחליף שורות ל-CRLF,
+# ו-bash על השרת נכשל עם "$'\r': command not found".
+*.sh text eol=lf
+Caddyfile text eol=lf
+*.yml text eol=lf
