@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="העוזר שלי">
+  <!-- מקור האמת לעיצוב האייקון. קובצי ה-PNG נגזרים מהצורות האלה -->
+  <rect width="512" height="512" fill="#0f766e"/>
+  <path d="M307 307 358 410 225 338Z" fill="#ffffff"/>
+  <rect x="92" y="113" width="328" height="225" rx="72" fill="#ffffff"/>
+  <path d="M174 230 230 287 343 164" fill="none" stroke="#0d5a55" stroke-width="44"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
