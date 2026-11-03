@@ -70,9 +70,20 @@ def _nullable(json_type: str) -> dict:
     return {"type": [json_type, "null"]}
 
 
+def _nullable_enum(values: list[str]) -> dict:
+    """שדה שהוא אחד מערכים קבועים, או null.
+
+    ‏⚠️ לא לכתוב את זה כ-``{"type": ["string", "null"], "enum": [...]}``.
+    האימות של structured outputs דוחה enum יחד עם רשימת טיפוסים, בשגיאה
+    ``Enum value 'low' does not match declared type '['string', 'null']'``.
+    נבדק מול ה-API ב-3.11.2026: ``anyOf`` עובר, הצורה השנייה מחזירה 400.
+    """
+    return {"anyOf": [{"type": "string", "enum": values}, {"type": "null"}]}
+
+
 # הסכימה נכתבת ביד ולא נגזרת מ-Pydantic, כי structured outputs דורש
 # additionalProperties: false ואת כל השדות ב-required, ו-Pydantic מייצר
-# צורות ($defs, anyOf) שלא תמיד עוברות את האימות הקשיח.
+# מבנה עם $defs שלא עובר את האימות הקשיח.
 INTENT_SCHEMA: dict = {
     "type": "object",
     "additionalProperties": False,
@@ -88,14 +99,11 @@ INTENT_SCHEMA: dict = {
         "project_id": _nullable("integer"),
         "due_date": _nullable("string"),
         "reminder_at": _nullable("string"),
-        "priority": {"type": ["string", "null"], "enum": ["low", "normal", "high", None]},
+        "priority": _nullable_enum(["low", "normal", "high"]),
         "notes": _nullable("string"),
         "task_number": _nullable("integer"),
         "task_text": _nullable("string"),
-        "list_filter": {
-            "type": ["string", "null"],
-            "enum": ["open", "today", "overdue", "client", "project", None],
-        },
+        "list_filter": _nullable_enum(["open", "today", "overdue", "client", "project"]),
         "question": _nullable("string"),
     },
     "required": [
