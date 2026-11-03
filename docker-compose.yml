@@ -33,7 +33,10 @@ services:
       WAHA_API_KEY: ${WAHA_API_KEY:?חסר WAHA_API_KEY ב-.env}
       WAHA_DASHBOARD_USERNAME: admin
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?חסר WAHA_DASHBOARD_PASSWORD ב-.env}
-      WHATSAPP_DEFAULT_ENGINE: WEBJS
+      # GOWS מדבר עם וואטסאפ ישירות בפרוטוקול שלה, בלי דפדפן. WEBJS נשבר
+      # ב-2.11.2026: הזרקת הסקריפט לדף של WhatsApp Web נכשלת בטיימאאוט בכל
+      # הגרסאות, וזו תקלה מוכרת בכל הספריות מבוססות-הדפדפן. גם חוסך ~750MB
+      WHATSAPP_DEFAULT_ENGINE: GOWS
       WHATSAPP_START_SESSION: default
       WHATSAPP_RESTART_ALL_SESSIONS: "True"
       # הודעות נשלחות ל-backend ברשת הפנימית. מנויים לשני האירועים כי WAHA
