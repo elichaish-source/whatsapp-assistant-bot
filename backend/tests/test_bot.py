@@ -7,7 +7,7 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -291,6 +291,155 @@ def test_cancel_does_not_touch_dashboard_tasks(db):
 
 def test_cancel_with_nothing_to_cancel(db):
     assert "אין מה לבטל" in actions.execute(db, Intent(action="cancel_last")).reply
+
+
+# --- זיכרון שיחה ---
+
+
+def logged(db, message_id: str, body: str, reply: str, **kwargs) -> BotMessage:
+    row = BotMessage(wa_message_id=message_id, body=body, reply=reply, **kwargs)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_history_is_empty_when_nothing_was_said(db):
+    assert actions.build_history(db, 1) == ""
+
+
+def test_history_shows_both_sides_oldest_first(db):
+    logged(db, "h-1", "תזכיר לי להתקשר לזיצר", "נשמר: להתקשר לזיצר")
+    last = logged(db, "h-2", "מה יש לי היום", "אין משימות פתוחות.")
+    text = actions.build_history(db, last.id + 1)
+    assert text.index("להתקשר לזיצר") < text.index("מה יש לי היום")
+    assert "אני:" in text
+    assert "העוזר:" in text
+
+
+def test_history_leaves_out_the_message_being_handled(db):
+    """ההודעה הנוכחית כבר רשומה ביומן כשהטיפול מתחיל, והיא לא חלק מהעבר."""
+    logged(db, "h-3", "ההודעה הקודמת", "התשובה הקודמת")
+    current = BotMessage(wa_message_id="h-4", body="ההודעה עכשיו")
+    db.add(current)
+    db.commit()
+    db.refresh(current)
+
+    text = actions.build_history(db, current.id)
+    assert "ההודעה הקודמת" in text
+    assert "ההודעה עכשיו" not in text
+
+
+def test_history_forgets_what_is_older_than_the_window(db):
+    old = datetime.now(timezone.utc) - actions.HISTORY_WINDOW - timedelta(minutes=1)
+    logged(db, "h-5", "שיחה מלפני שעה", "תשובה מלפני שעה", created_at=old)
+    assert actions.build_history(db, 10_000) == ""
+
+
+def test_history_keeps_at_most_a_handful_of_exchanges(db):
+    for index in range(actions.HISTORY_EXCHANGES + 3):
+        logged(db, f"h-many-{index}", f"הודעה {index}", f"תשובה {index}")
+    text = actions.build_history(db, 10_000)
+    assert text.count("אני:") == actions.HISTORY_EXCHANGES
+    assert "הודעה 0" not in text
+
+
+def test_history_squeezes_a_reply_into_one_line(db):
+    row = logged(db, "h-6", "תזכיר לי", 'נשמר: להתקשר\nעד 04/11\nלביטול כתוב "בטל".')
+    text = actions.build_history(db, row.id + 1)
+    assert 'נשמר: להתקשר עד 04/11 לביטול כתוב "בטל".' in text
+
+
+def test_the_history_reaches_the_model_before_the_message():
+    text = build_user_message(
+        "בעצם ביום חמישי",
+        "תחומים:\n  1: לקוחות",
+        datetime(2026, 11, 3, 20, 0),
+        "השיחה עד עכשיו (ישן → חדש):\n[20:41] אני: תזכיר לי מחר להתקשר לזיצר",
+    )
+    assert text.index("השיחה עד עכשיו") < text.index("ההודעה:")
+    assert text.rstrip().endswith("בעצם ביום חמישי")
+
+
+def test_without_history_the_message_looks_exactly_as_before():
+    stamp = datetime(2026, 11, 3, 20, 0)
+    assert build_user_message("רשימה", "תחומים:", stamp, "") == build_user_message(
+        "רשימה", "תחומים:", stamp
+    )
+
+
+# --- תיקון המשימה האחרונה ---
+
+
+def saved_by_bot(db, title: str, **kwargs) -> Task:
+    task = new_task(db, title, from_bot=True, **kwargs)
+    db.add(BotMessage(wa_message_id=f"saved-{task.id}", intent="add_task", task_id=task.id))
+    db.commit()
+    return task
+
+
+def test_update_last_changes_only_what_was_said(db):
+    task = saved_by_bot(db, "להתקשר לזיצר", due_date=date(2026, 11, 4))
+    outcome = actions.execute(db, Intent(action="update_last", due_date="2026-11-05"))
+    db.refresh(task)
+    assert task.title == "להתקשר לזיצר"
+    assert task.due_date == date(2026, 11, 5)
+    assert "עודכן: להתקשר לזיצר" in outcome.reply
+    assert outcome.task_id == task.id
+
+
+def test_update_last_lets_the_new_reminder_go_out(db):
+    stamp = datetime(2026, 11, 3, 18, 0, tzinfo=timezone.utc)
+    task = saved_by_bot(db, "להתקשר לזיצר", reminder_at=stamp, reminder_sent_at=stamp)
+    actions.execute(db, Intent(action="update_last", reminder_at="2026-12-01T10:00"))
+    db.refresh(task)
+    assert task.reminder_sent_at is None
+
+
+def test_update_last_ignores_an_id_that_does_not_exist(db):
+    """מזהה מומצא היה מפיל את העדכון על מפתח זר, והמשתמש לא היה מקבל תשובה."""
+    task = saved_by_bot(db, "להתקשר לזיצר")
+    outcome = actions.execute(db, Intent(action="update_last", client_id=9999))
+    db.refresh(task)
+    assert task.client_id is None
+    assert "לא הבנתי מה לשנות" in outcome.reply
+
+
+def test_update_last_moves_the_task_to_a_real_client(db):
+    task = saved_by_bot(db, "להתקשר לזיצר")
+    client = Client(name="זיצר")
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+
+    actions.execute(db, Intent(action="update_last", client_id=client.id))
+    db.refresh(task)
+    assert task.client_id == client.id
+
+
+def test_update_last_with_nothing_saved(db):
+    outcome = actions.execute(db, Intent(action="update_last", priority="high"))
+    assert "אין משימה אחרונה" in outcome.reply
+
+
+def test_update_last_does_not_touch_dashboard_tasks(db):
+    task = new_task(db, "משימה מהדשבורד")
+    db.add(BotMessage(wa_message_id="dash-1", intent="add_task", task_id=task.id))
+    db.commit()
+
+    outcome = actions.execute(db, Intent(action="update_last", priority="high"))
+    db.refresh(task)
+    assert task.priority == "normal"
+    assert "לא נוצרה מהבוט" in outcome.reply
+
+
+def test_cancel_also_undoes_a_task_that_was_updated(db):
+    task = saved_by_bot(db, "להתקשר לזיצר")
+    db.add(BotMessage(wa_message_id="upd-1", intent="update_last", task_id=task.id))
+    db.commit()
+
+    assert "בוטל" in actions.execute(db, Intent(action="cancel_last")).reply
+    assert db.scalars(select(Task)).all() == []
 
 
 # --- כוונות שאינן פעולה ---
