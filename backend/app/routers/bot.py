@@ -43,18 +43,34 @@ def _chat_phone(chat_id: str | None) -> str:
     return auth.normalize_phone((chat_id or "").split("@")[0])
 
 
+def _is_owner_lid(chat_id: str | None) -> bool:
+    """האם מזהה הצ'אט הוא ה-LID של החשבון שלנו."""
+    if not chat_id or not chat_id.endswith("@lid"):
+        return False
+    own = waha.own_lid()
+    return bool(own) and chat_id.split("@")[0] == own
+
+
 def is_owner_self_chat(payload: dict) -> bool:
     """האם זו הודעה שהמשתמש שלח לעצמו, ולא תשובה של הבוט עצמו.
 
     ‏source == "api" הוא מה שהבוט שלח דרך WAHA. בלי הסינון הזה כל תשובה
     שלו הייתה חוזרת אליו כהודעה חדשה, בלופ אין־סופי.
+
+    שני מבנים אפשריים, תלוי במנוע. ‏WEBJS ממלא גם ``from`` וגם ``to``, ובצ'אט
+    עם עצמו שניהם הבעלים. ‏GOWS לא ממלא ``to`` כלל, ושם ``from`` הוא הצ'אט
+    עצמו — ולפעמים ב-LID ולא במספר. לכן אם יש ``to`` דורשים ששניהם יהיו
+    הבעלים, ואם אין — ``from`` לבדו הוא הצ'אט שצריך להשוות.
     """
     owner = get_settings().owner_phone
     if not owner or not payload.get("fromMe"):
         return False
     if payload.get("source") == "api":
         return False
-    return _chat_phone(payload.get("from")) == owner == _chat_phone(payload.get("to"))
+    chat_id = payload.get("from")
+    if payload.get("to"):
+        return _chat_phone(chat_id) == owner == _chat_phone(payload.get("to"))
+    return _chat_phone(chat_id) == owner or _is_owner_lid(chat_id)
 
 
 def handle_message(wa_message_id: str, body: str) -> None:
