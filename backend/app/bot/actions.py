@@ -10,12 +10,13 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from .. import memory
 from ..auth import aware, now
 from ..config import get_settings
-from ..models import BotMessage, Client, Domain, Project, Task, TaskType
+from ..models import BotMessage, Client, Domain, MemoryFact, Project, Task, TaskType
 from ..routers.tasks import resolve_task_fields
 from ..schemas import TaskIn
 from .intent import Intent
@@ -161,10 +162,12 @@ class Outcome:
         reply: str,
         task_id: int | None = None,
         listed_task_ids: list[int] | None = None,
+        fact_id: int | None = None,
     ) -> None:
         self.reply = reply
         self.task_id = task_id
         self.listed_task_ids = listed_task_ids or []
+        self.fact_id = fact_id
 
 
 def _parse_due(value: str | None) -> date | None:
@@ -214,6 +217,10 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
     db.add(task)
     db.commit()
     db.refresh(task)
+
+    memory.observe(
+        "task_created", "bot", task_id=task.id, client_id=task.client_id, detail=task.title
+    )
 
     detail = describe(db, task)
     reply = f"נשמר: {task.title}"
@@ -270,6 +277,9 @@ def _complete_task(db: Session, intent: Intent) -> Outcome:
     task.status = "done"
     task.done_at = now()
     db.commit()
+    memory.observe(
+        "task_done", "bot", task_id=task.id, client_id=task.client_id, detail=task.title
+    )
     return Outcome(f"סומן כבוצע: {task.title}", task_id=task.id)
 
 
@@ -318,13 +328,47 @@ def _last_bot_task_row(db: Session) -> BotMessage | None:
     ).first()
 
 
+# מה ש"בטל" יודע לבטל: משימה שנוצרה, תיקון שלה, או עובדה שנרשמה בזיכרון
+_UNDOABLE = ("add_task", "update_last", "remember")
+
+
+def _last_bot_action_row(db: Session) -> BotMessage | None:
+    """ההודעה האחרונה שבעקבותיה הבוט שינה משהו — משימה או עובדה.
+
+    דורשת שמשהו אכן נשמר, כי הודעה שנכשלה ("לא הבנתי מה המשימה") לא אמורה
+    לחסום את הביטול של מה שנשמר לפניה.
+    """
+    return db.scalars(
+        select(BotMessage)
+        .where(
+            BotMessage.intent.in_(_UNDOABLE),
+            or_(BotMessage.task_id.is_not(None), BotMessage.fact_id.is_not(None)),
+        )
+        .order_by(BotMessage.id.desc())
+        .limit(1)
+    ).first()
+
+
 def _cancel_last(db: Session) -> Outcome:
-    """מבטל את המשימה שהבוט יצר לאחרונה. לא נוגע במשימות מהדשבורד."""
-    row = _last_bot_task_row(db)
-    if not row or not row.task_id:
+    """מבטל את הדבר האחרון שהבוט עשה: משימה שיצר או עובדה שרשם.
+
+    לא נוגע במשימות מהדשבורד — מה שלא נוצר מהבוט לא נמחק ממנו.
+    """
+    row = _last_bot_action_row(db)
+    if not row:
         return Outcome("אין מה לבטל.")
     if row.created_at and now() - aware(row.created_at) > CANCEL_WINDOW:
         return Outcome("עבר יותר מדי זמן מאז השמירה. אפשר למחוק מהדשבורד.")
+
+    if row.fact_id:
+        fact = db.get(MemoryFact, row.fact_id)
+        if not fact:
+            return Outcome("זה כבר לא רשום בזיכרון.")
+        content = fact.content
+        db.delete(fact)
+        db.commit()
+        memory.observe("fact_removed", "bot", detail=content)
+        return Outcome(f"נמחק מהזיכרון: {content}")
 
     task = db.get(Task, row.task_id)
     if not task:
@@ -335,7 +379,46 @@ def _cancel_last(db: Session) -> Outcome:
     title = task.title
     db.delete(task)
     db.commit()
+    memory.observe("task_cancelled", "bot", detail=title)
     return Outcome(f"בוטל: {title}")
+
+
+def _remember(db: Session, intent: Intent) -> Outcome:
+    """רושם עובדה לזיכרון ארוך-טווח: "תזכור שדני לא עונה לפני עשר".
+
+    הוראה ישירה ממך היא האישור עצמו, ולכן העובדה נכנסת מיד ולא ממתינה
+    לאישור בדשבורד. אין כאן הסקה ואין ניחוש: מה שנרשם הוא מה שאמרת, ואפשר
+    לבטל מיד או למחוק אחר כך במסך הזיכרון.
+    """
+    content = " ".join((intent.fact or "").split())[: memory.MAX_CONTENT_CHARS]
+    if not content:
+        return Outcome("לא הבנתי מה לזכור. אפשר לנסח שוב?")
+
+    # מזהה מומצא היה מפיל את השמירה על מפתח זר ברקע, בלי שתקבל תשובה
+    client_id = intent.client_id if intent.client_id and db.get(Client, intent.client_id) else None
+    project_id = (
+        intent.project_id if intent.project_id and db.get(Project, intent.project_id) else None
+    )
+
+    existing = db.scalars(select(MemoryFact).where(MemoryFact.content == content)).first()
+    if existing:
+        return Outcome("זה כבר רשום אצלי.", fact_id=existing.id)
+
+    dimension = memory.clean_dimension(intent.dimension)
+    fact = MemoryFact(
+        dimension=dimension,
+        client_id=client_id,
+        project_id=project_id,
+        content=content,
+        source="bot",
+    )
+    db.add(fact)
+    db.commit()
+    db.refresh(fact)
+    memory.observe("fact_added", "bot", client_id=client_id, detail=content)
+    return Outcome(
+        f"נרשם בזיכרון: {content}\n[{memory.dimension_name(dimension)}]", fact_id=fact.id
+    )
 
 
 # שדות שהם מזהה לרשומה אחרת. מאמתים שהמזהה קיים לפני שכותבים אותו, כי
@@ -399,6 +482,9 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
     db.commit()
     db.refresh(task)
     detail = describe(db, task)
+    memory.observe(
+        "task_updated", "bot", task_id=task.id, client_id=task.client_id, detail=task.title
+    )
     return Outcome(f"עודכן: {task.title}" + (f"\n{detail}" if detail else ""), task_id=task.id)
 
 
@@ -411,6 +497,8 @@ def execute(db: Session, intent: Intent) -> Outcome:
         return _list_tasks(db, intent)
     if intent.action == "cancel_last":
         return _cancel_last(db)
+    if intent.action == "remember":
+        return _remember(db, intent)
     if intent.action == "update_last":
         return _update_last(db, intent)
     if intent.action == "clarify":

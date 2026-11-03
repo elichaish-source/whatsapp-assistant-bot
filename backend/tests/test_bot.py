@@ -13,8 +13,16 @@ import pytest
 from sqlalchemy import select
 
 from app.bot import actions, reminders
-from app.bot.intent import INTENT_SCHEMA, Intent, IntentError, build_user_message, extract
-from app.models import BotMessage, Client, Domain, Task
+from app.bot.intent import (
+    INTENT_SCHEMA,
+    Intent,
+    IntentError,
+    _system_blocks,
+    build_user_message,
+    extract,
+)
+from app import memory
+from app.models import BotMessage, Client, Domain, MemoryFact, Observation, Task
 from app.routers import bot as bot_router
 
 OWNER = "972501234567"
@@ -440,6 +448,185 @@ def test_cancel_also_undoes_a_task_that_was_updated(db):
 
     assert "בוטל" in actions.execute(db, Intent(action="cancel_last")).reply
     assert db.scalars(select(Task)).all() == []
+
+
+# --- זיכרון ארוך-טווח ---
+
+
+def facts(db) -> list[MemoryFact]:
+    return list(db.scalars(select(MemoryFact).order_by(MemoryFact.id)).all())
+
+
+def kinds(db) -> list[str]:
+    return [row.kind for row in db.scalars(select(Observation).order_by(Observation.id)).all()]
+
+
+def test_remember_saves_the_fact_with_its_dimension(db):
+    outcome = actions.execute(db, Intent(action="remember", fact="דני הוא דני כהן מיעדים", dimension=1))
+    fact = facts(db)[0]
+    assert fact.content == "דני הוא דני כהן מיעדים"
+    assert fact.dimension == 1
+    assert fact.source == "bot"
+    assert "נרשם בזיכרון" in outcome.reply
+    assert "אנשים" in outcome.reply
+    assert outcome.fact_id == fact.id
+
+
+def test_remember_without_content_asks_again(db):
+    outcome = actions.execute(db, Intent(action="remember", fact="   ", dimension=2))
+    assert facts(db) == []
+    assert "לא הבנתי מה לזכור" in outcome.reply
+
+
+def test_remember_falls_back_to_a_real_dimension(db):
+    """ממד שהמודל המציא לא אמור להפיל את השמירה, רק לקבל תווית ברירת מחדל."""
+    actions.execute(db, Intent(action="remember", fact="משהו", dimension=99))
+    assert facts(db)[0].dimension == memory.FALLBACK_DIMENSION
+
+
+def test_remember_ignores_a_client_that_does_not_exist(db):
+    actions.execute(db, Intent(action="remember", fact="משהו", dimension=1, client_id=4321))
+    assert facts(db)[0].client_id is None
+
+
+def test_remember_attaches_a_real_client(db):
+    client_row = Client(name="יעדים")
+    db.add(client_row)
+    db.commit()
+    actions.execute(db, Intent(action="remember", fact="מעדיף מייל", dimension=2, client_id=client_row.id))
+    assert facts(db)[0].client_id == client_row.id
+
+
+def test_remember_does_not_save_the_same_fact_twice(db):
+    actions.execute(db, Intent(action="remember", fact="לא אחרי שבע", dimension=2))
+    outcome = actions.execute(db, Intent(action="remember", fact="לא אחרי שבע", dimension=2))
+    assert len(facts(db)) == 1
+    assert "כבר רשום" in outcome.reply
+
+
+def test_cancel_removes_the_fact_that_was_just_saved(db):
+    outcome = actions.execute(db, Intent(action="remember", fact="לא בשישי", dimension=5))
+    db.add(BotMessage(wa_message_id="fact-1", intent="remember", fact_id=outcome.fact_id))
+    db.commit()
+    assert "נמחק מהזיכרון" in actions.execute(db, Intent(action="cancel_last")).reply
+    assert facts(db) == []
+
+
+def test_cancel_undoes_the_newest_action_and_not_an_older_one(db):
+    task = saved_by_bot(db, "להתקשר לזיצר")
+    outcome = actions.execute(db, Intent(action="remember", fact="לא בשישי", dimension=5))
+    db.add(BotMessage(wa_message_id="fact-2", intent="remember", fact_id=outcome.fact_id))
+    db.commit()
+    actions.execute(db, Intent(action="cancel_last"))
+    assert facts(db) == []
+    assert db.get(Task, task.id) is not None
+
+
+def test_cancel_looks_past_a_message_where_nothing_was_saved(db):
+    """הודעה שנכשלה לא אמורה לחסום את הביטול של מה שנשמר לפניה."""
+    task = saved_by_bot(db, "להתקשר לזיצר")
+    logged(db, "failed-1", "תזכיר לי", "לא הבנתי מה המשימה", intent="add_task")
+    assert "בוטל: להתקשר לזיצר" in actions.execute(db, Intent(action="cancel_last")).reply
+    assert db.get(Task, task.id) is None
+
+
+# --- הבלוק שנשלח למודל ---
+
+
+def fact(db, content: str, dimension: int = 2, **kwargs) -> MemoryFact:
+    row = MemoryFact(content=content, dimension=dimension, source="dashboard", **kwargs)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_block_is_empty_without_facts(db):
+    assert memory.build_block(db) == ""
+
+
+def test_block_holds_only_the_dimensions_the_bot_needs(db):
+    fact(db, "לא עונה לטלפון אחרי שבע", dimension=2)
+    fact(db, "ללקוחות נדל\"ן כותב רשמי", dimension=9)
+    block = memory.build_block(db)
+    assert "לא עונה לטלפון אחרי שבע" in block
+    assert "רשמי" not in block
+
+
+def test_block_names_the_client_the_fact_is_about(db):
+    client_row = Client(name="יעדים")
+    db.add(client_row)
+    db.commit()
+    fact(db, "מעדיף מייל", dimension=1, client_id=client_row.id)
+    assert "לקוח יעדים" in memory.build_block(db)
+
+
+def test_block_squeezes_a_fact_into_one_line(db):
+    fact(db, "שורה\nושורה")
+    assert "שורה ושורה" in memory.build_block(db)
+
+
+def test_the_memory_is_sent_as_a_cached_system_block():
+    blocks = _system_blocks("מה שאני יודע עליך:\n[אנשים] דני כהן")
+    assert len(blocks) == 2
+    assert blocks[1]["text"].startswith("מה שאני יודע עליך")
+    assert all(block["cache_control"] == {"type": "ephemeral"} for block in blocks)
+
+
+def test_without_memory_the_prompt_looks_exactly_as_before():
+    assert len(_system_blocks("")) == 1
+
+
+# --- יומן האירועים ---
+
+
+def test_a_new_fact_is_written_to_the_journal(db):
+    actions.execute(db, Intent(action="remember", fact="לא בשישי", dimension=5))
+    assert "fact_added" in kinds(db)
+
+
+def test_a_task_from_the_bot_is_written_to_the_journal(db):
+    actions.execute(
+        db, Intent(action="add_task", title="להתקשר לדני", domain_id=domain_id(db, "כספים"))
+    )
+    assert "task_created" in kinds(db)
+
+
+def test_the_journal_tells_a_postponed_date_from_any_other_change(client, db):
+    created = client.post("/api/tasks", json={"title": "להתקשר לדני"}).json()
+    body = {"title": "להתקשר לדני", "due_date": "2026-12-01", "priority": "normal", "status": "open"}
+    client.put(f"/api/tasks/{created['id']}", json=body)
+    client.put(f"/api/tasks/{created['id']}", json={**body, "due_date": "2026-12-10"})
+    client.put(f"/api/tasks/{created['id']}", json={**body, "due_date": "2026-11-20"})
+    assert kinds(db).count("task_postponed") == 1
+    assert kinds(db).count("task_rescheduled") == 2
+
+
+def test_the_journal_records_a_change_of_domain(client, db):
+    created = client.post("/api/tasks", json={"title": "להתקשר לדני"}).json()
+    client.put(
+        f"/api/tasks/{created['id']}",
+        json={"title": "להתקשר לדני", "domain_id": domain_id(db, "כספים"), "status": "open"},
+    )
+    assert "task_reclassified" in kinds(db)
+
+
+def test_a_broken_journal_does_not_break_the_action(monkeypatch):
+    """כלל הברזל: הזיכרון הוא העשרה ולא תלות. כשל ברישום נבלע ולא מטפס."""
+
+    def boom():
+        raise RuntimeError("בסיס הנתונים לא זמין")
+
+    monkeypatch.setattr(memory, "SessionLocal", boom)
+    memory.observe("task_created", "bot")
+
+
+def test_a_broken_memory_leaves_the_block_empty():
+    class Broken:
+        def scalars(self, *args, **kwargs):
+            raise RuntimeError("בסיס הנתונים לא זמין")
+
+    assert memory.build_block(Broken()) == ""
 
 
 # --- כוונות שאינן פעולה ---

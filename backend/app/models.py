@@ -166,10 +166,15 @@ class BotMessage(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
     # המשימות שהוצגו בתשובה, לפי הסדר, מופרדות בפסיק. כך "סיימתי 3" יודע למה הכוונה
     listed_task_ids: Mapped[str | None] = mapped_column(Text)
+    # העובדה שנרשמה לזיכרון בעקבות ההודעה, כדי ש"בטל" ידע למחוק אותה
+    fact_id: Mapped[int | None] = mapped_column(ForeignKey("memory_facts.id", ondelete="SET NULL"))
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     cached_tokens: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
+    # בלוק הזיכרון המדויק שהוזרק לפרומפט. חובה לניפוי באגים: בלי זה
+    # "למה הבוט החליט את זה?" הופך לשאלה בלי תשובה
+    memory_used: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -182,6 +187,62 @@ class AuthSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     phone: Mapped[str] = mapped_column(String(30), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# --- זיכרון ארוך-טווח ---
+
+
+class MemoryFact(TimestampMixin, Base):
+    """עובדה אחת שהבוט יודע, במשפט אחד.
+
+    בשלב 2ב עובדה נכנסת רק משתי דרכים ודאיות: הוראה ישירה בוואטסאפ
+    ("תזכור ש…") או הקלדה בדשבורד. אין הסקה אוטומטית — היא נדחתה לשלב 6ב,
+    כדי שהבוט לא ילמד שגיאות בשקט.
+
+    שלושה שדות שמופיעים במפרט אינם כאן בכוונה: ``scope`` נגזר מ-client_id
+    ומ-project_id ולכן היה כפול, ו-``confidence`` ו-``superseded_by`` משרתים
+    רק הסקה. מחיקה מהדשבורד היא מחיקה אמיתית, ולא סטטוס — מה שנמחק נרשם
+    ב-observations, אז שום אות ללמידה לא נאבד.
+    """
+
+    __tablename__ = "memory_facts"
+    __table_args__ = (
+        CheckConstraint("dimension BETWEEN 1 AND 9", name="memory_fact_dimension"),
+        CheckConstraint("source IN ('bot', 'dashboard')", name="memory_fact_source"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # ‏1–9 לפי טבלת הממדים ב-SPEC-ASSISTANT.md, סעיף 2
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    # כששניהם ריקים העובדה היא עליך עצמך
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"))
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class Observation(Base):
+    """יומן אירועים גולמי, לכתיבה בלבד.
+
+    ‏⚠️ אף אחד לא קורא את הטבלה הזאת בשלב 2ב, וזה לא פספוס. היא נכתבת מהיום
+    כדי שכששלב 6ב יגיע יהיה ממה להסיק דפוסים — "אתה דוחה משימות מחשב ארבע
+    פעמים בממוצע" — על חודשים של היסטוריה אמיתית. בוט שרץ חצי שנה בלי לתעד
+    זרק חצי שנה של למידה, ואת הזמן הזה אי אפשר לקנות בחזרה.
+    """
+
+    __tablename__ = "observations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # task_created, task_done, task_postponed, task_reclassified, fact_added...
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # bot או dashboard
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="SET NULL"))
+    detail: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import waha
+from .. import memory, waha
 from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
@@ -61,6 +61,14 @@ def send_due_reminders(db: Session, moment: datetime | None = None) -> int:
             try:
                 waha.send_text(phone, reminder_text(db, task))
                 sent += 1
+                # מתי יצאה תזכורת, כדי שאפשר יהיה ללמוד מתי היא עובדת
+                memory.observe(
+                    "reminder_sent",
+                    "bot",
+                    task_id=task.id,
+                    client_id=task.client_id,
+                    detail=task.title,
+                )
             except waha.WahaError:
                 # לא מסמנים כנשלח, כדי שהסבב הבא ינסה שוב
                 log.exception("שליחת תזכורת למשימה %s נכשלה", task.id)

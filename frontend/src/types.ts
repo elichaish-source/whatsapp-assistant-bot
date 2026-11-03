@@ -54,3 +54,21 @@ export const PRIORITY_LABELS: Record<Priority, string> = {
   normal: "רגילה",
   low: "נמוכה",
 };
+
+export interface MemoryFact {
+  id: number;
+  dimension: number;
+  content: string;
+  client_id: number | null;
+  project_id: number | null;
+  source: "bot" | "dashboard";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryDimension {
+  id: number;
+  name: string;
+  // האם עובדות בממד הזה נשלחות לבוט בשלב הנוכחי
+  in_prompt: boolean;
+}

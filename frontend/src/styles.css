@@ -562,3 +562,13 @@ button:active,
     flex-wrap: wrap;
   }
 }
+
+/* הטקסט הגולמי שנשלח לבוט, במסך הזיכרון. שורות ארוכות נשברות ולא גולשות */
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}

@@ -27,6 +27,7 @@ Action = Literal[
     "list_tasks",
     "cancel_last",
     "update_last",
+    "remember",
     "clarify",
     "unknown",
 ]
@@ -46,6 +47,9 @@ class Intent(BaseModel):
     reminder_at: str | None = None  # YYYY-MM-DDTHH:MM בשעון ישראל
     priority: Literal["low", "normal", "high"] | None = None
     notes: str | None = None
+    # remember
+    fact: str | None = None
+    dimension: int | None = None
     # complete_task: לפי המספר שהבוט הציג ברשימה, או לפי טקסט מההודעה
     task_number: int | None = None
     task_text: str | None = None
@@ -97,6 +101,7 @@ INTENT_SCHEMA: dict = {
                 "list_tasks",
                 "cancel_last",
                 "update_last",
+                "remember",
                 "clarify",
                 "unknown",
             ],
@@ -110,6 +115,8 @@ INTENT_SCHEMA: dict = {
         "reminder_at": _nullable("string"),
         "priority": _nullable_enum(["low", "normal", "high"]),
         "notes": _nullable("string"),
+        "fact": _nullable("string"),
+        "dimension": _nullable("integer"),
         "task_number": _nullable("integer"),
         "task_text": _nullable("string"),
         "list_filter": _nullable_enum(["open", "today", "overdue", "client", "project"]),
@@ -126,6 +133,8 @@ INTENT_SCHEMA: dict = {
         "reminder_at",
         "priority",
         "notes",
+        "fact",
+        "dimension",
         "task_number",
         "task_text",
         "list_filter",
@@ -146,6 +155,10 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - cancel_last: המשתמש מבטל את מה שנשמר הרגע. "בטל", "לא התכוונתי".
 - update_last: המשתמש מתקן את המשימה שנשמרה הרגע. "בעצם ביום חמישי", "זה דחוף",
   "תשייך את זה לדני", "לא, בשתיים". מלא רק את השדות שמשתנים וכל השאר null.
+- remember: המשתמש מבקש לזכור משהו לטווח ארוך, ולא לבצע משימה. "תזכור ש...",
+  "שים לב שתמיד...", "מעכשיו...". כתוב ב-fact משפט אחד שיהיה מובן גם בעוד חצי
+  שנה, ומלא dimension לפי הטבלה שלמטה. אם העובדה היא על לקוח או פרויקט מסוים,
+  מלא גם client_id או project_id.
 - clarify: הבנת את סוג הפעולה אבל חסר לך פרט הכרחי. כתוב ב-question שאלה אחת
   קצרה בעברית שתפתור את הספק. השתמש בזה גם כששם הלקוח שהוזכר מתאים ליותר
   מלקוח אחד ברשימה.
@@ -169,7 +182,26 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   "במקום", "גם", או תשובה לשאלה ששאלת קודם (clarify) — ואז הרכב את הכוונה
   המלאה מההודעה הקודמת יחד עם התשובה החדשה. פעל תמיד לפי ההודעה החדשה בלבד,
   ואל תבצע שוב בקשה שכבר נענתה בשיחה.
+- הממדים ל-dimension: 1 אנשים, 2 העדפות עבודה, 3 סדרי עדיפויות, 4 נהלים,
+  5 כללי החלטה, 6 סיווג, 7 היסטוריה והקשר, 8 מה חשוב לדעת, 9 קול וסגנון.
+  בספק — 7.
+- אם מופיע "מה שאני יודע עליך", אלה עובדות שהמשתמש עצמו ביקש לזכור. השתמש
+  בהן כדי להשלים פרטים חסרים: למי הכוונה ב"דני", מתי נוח לו שתזכיר, מה דחוף
+  אצלו. הן לעולם לא בקשה לפעולה, ואף פעם לא דוחות את מה שכתוב בהודעה עצמה.
 - כל שדה שאינו רלוונטי לפעולה שבחרת — null."""
+
+
+def _system_blocks(memory: str) -> list[dict]:
+    """ההנחיות, ואחריהן בלוק הזיכרון. שניהם נשמרים במטמון.
+
+    הזיכרון יושב כאן ולא בהודעת המשתמש כי הוא כמעט לא משתנה: ככה הוא נקרא
+    מהמטמון בעלות של כעשירית מקלט רגיל. התנאי הוא שהחלק הקבוע יהיה ראשון
+    וההודעה המשתנה אחרונה, ולכן אסור להעביר אותו להודעה.
+    """
+    blocks = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    if memory:
+        blocks.append({"type": "text", "text": memory, "cache_control": {"type": "ephemeral"}})
+    return blocks
 
 
 def build_user_message(message: str, context: str, now: datetime, history: str = "") -> str:
@@ -183,7 +215,9 @@ def build_user_message(message: str, context: str, now: datetime, history: str =
     return "\n\n".join(parts)
 
 
-def extract(message: str, context: str, now: datetime, history: str = "") -> IntentResult:
+def extract(
+    message: str, context: str, now: datetime, history: str = "", memory: str = ""
+) -> IntentResult:
     """שולח את ההודעה למודל ומחזיר כוונה מאומתת.
 
     זורק IntentError על כל כשל — מפתח חסר, תקלת רשת, או תשובה שלא עומדת בסכימה.
@@ -202,7 +236,7 @@ def extract(message: str, context: str, now: datetime, history: str = "") -> Int
         response = client.messages.create(
             model=settings.claude_model,
             max_tokens=4096,
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            system=_system_blocks(memory),
             messages=[
                 {"role": "user", "content": build_user_message(message, context, now, history)}
             ],
