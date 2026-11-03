@@ -117,6 +117,29 @@ def test_schema_matches_the_model():
     assert set(INTENT_SCHEMA["required"]) == set(Intent.model_fields)
 
 
+def test_no_enum_sits_next_to_a_list_of_types():
+    """‏structured outputs מחזיר 400 על enum יחד עם ["string", "null"].
+
+    זה מה שהפיל את הבוט בבדיקה הראשונה מקצה לקצה, ולא נתפס בבדיקות כי
+    הן לא קוראות ל-API. שדה שמותר בו null וגם מוגבל לערכים — דרך anyOf.
+    """
+    for name, prop in INTENT_SCHEMA["properties"].items():
+        if "enum" in prop:
+            assert isinstance(prop.get("type"), str), f"{name}: enum עם רשימת טיפוסים"
+            assert None not in prop["enum"], f"{name}: null בתוך enum"
+        for option in prop.get("anyOf", []):
+            if "enum" in option:
+                assert isinstance(option.get("type"), str), name
+                assert None not in option["enum"], name
+
+
+def test_nullable_enums_are_written_as_anyof():
+    for name in ("priority", "list_filter"):
+        options = INTENT_SCHEMA["properties"][name]["anyOf"]
+        assert {"type": "null"} in options, name
+        assert any("enum" in option for option in options), name
+
+
 def test_user_message_states_the_time_and_puts_the_message_last():
     text = build_user_message("רשימה", "תחומים:\n  1: לקוחות", datetime(2026, 11, 2, 9, 30))
     assert "2026-11-02 09:30" in text
