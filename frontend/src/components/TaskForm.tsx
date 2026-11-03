@@ -107,9 +107,9 @@ export default function TaskForm({
         </select>
       </label>
       <label>
-        תחום *
-        <select value={form.domain_id ?? ""} onChange={(e) => set("domain_id", toId(e.target.value))} required>
-          <option value="">בחר…</option>
+        תחום
+        <select value={form.domain_id ?? ""} onChange={(e) => set("domain_id", toId(e.target.value))}>
+          <option value="">ללא תחום</option>
           {domains.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name}

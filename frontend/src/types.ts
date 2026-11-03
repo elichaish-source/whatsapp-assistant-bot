@@ -39,7 +39,7 @@ export interface Task {
   title: string;
   status: "open" | "done";
   done_at: string | null;
-  domain_id: number;
+  domain_id: number | null;
   task_type_id: number | null;
   client_id: number | null;
   project_id: number | null;
