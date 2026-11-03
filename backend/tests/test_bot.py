@@ -18,6 +18,7 @@ from app.models import BotMessage, Client, Domain, Task
 from app.routers import bot as bot_router
 
 OWNER = "972501234567"
+OWNER_LID = "111222333444555"
 HMAC_KEY = "test-hmac-key"
 
 
@@ -332,6 +333,13 @@ def test_reminder_text_includes_the_client(db):
         ({"fromMe": True, "source": "app", "from": f"{OWNER}@c.us", "to": "972500000000@c.us"}, False),
         ({"fromMe": True, "source": "app", "from": "972500000000@c.us", "to": f"{OWNER}@c.us"}, False),
         ({}, False),
+        # מבנה GOWS: אין שדה to, והשדה from הוא הצ'אט עצמו
+        ({"fromMe": True, "source": "app", "from": f"{OWNER}@c.us", "to": None}, True),
+        ({"fromMe": True, "source": "app", "from": "972500000000@c.us", "to": None}, False),
+        ({"fromMe": True, "source": "api", "from": f"{OWNER}@c.us", "to": None}, False),
+        # ‏GOWS מזהה חלק מהצ'אטים ב-LID ולא במספר
+        ({"fromMe": True, "source": "app", "from": f"{OWNER_LID}@lid"}, True),
+        ({"fromMe": True, "source": "app", "from": "999888777666@lid"}, False),
     ],
 )
 def test_only_the_self_chat_is_accepted(payload, expected):

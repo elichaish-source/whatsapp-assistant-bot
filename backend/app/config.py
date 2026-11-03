@@ -10,6 +10,9 @@ class Settings(BaseSettings):
 
     # המספר של בעל המערכת בפורמט בינלאומי בלי + (למשל 972501234567)
     owner_phone: str = ""
+    # ה-LID של אותו חשבון — מזהה הפרטיות של וואטסאפ, שמנוע GOWS משתמש בו
+    # בחלק מהצ'אטים במקום במספר. ריק = נשלף מ-WAHA בפעם הראשונה שצריך אותו
+    owner_lid: str = ""
 
     waha_url: str = "http://waha:3000"
     waha_api_key: str = ""

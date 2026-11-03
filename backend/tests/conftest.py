@@ -8,6 +8,7 @@ if not TEST_DB:
 
 os.environ["DATABASE_URL"] = TEST_DB
 os.environ["OWNER_PHONE"] = "972501234567"
+os.environ["OWNER_LID"] = "111222333444555"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["WAHA_WEBHOOK_HMAC_KEY"] = "test-hmac-key"
 # ללא מפתח Claude, כך שאף בדיקה לא תקרא ל-API בתשלום
