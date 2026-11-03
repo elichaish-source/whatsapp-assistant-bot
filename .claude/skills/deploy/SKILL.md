@@ -86,13 +86,25 @@ ssh -t assistant "cd whatsapp-assistant-bot && ./scripts/install.sh"
 - לפני ההרצה: ב-[duckdns.org](https://www.duckdns.org) הדומיין `elichay` כבר קיים. הכתובת שלו תתעדכן לבד.
 - אם הסקריפט נכשל, תקרא את הלוגים: `ssh assistant "cd whatsapp-assistant-bot && sudo docker compose logs --tail 100"`
 
-## שלב 7: חיבור וואטסאפ (QR)
-1. המשתמש פותח מנהרה בחלון PowerShell שלו, ומשאיר אותו פתוח:
-   ```powershell
-   ssh -L 3000:localhost:3000 assistant
+## שלב 7: חיבור וואטסאפ
+המנוע הוא GOWS, שלא מפעיל דפדפן. אין צורך במנהרת SSH ולא בדשבורד של WAHA.
+
+⚠️ **חלון ההתחברות נסגר אחרי כדקה וחצי**, ואז הסשן עובר ל-`FAILED`. לכן **קודם מוודאים שהמשתמש מוכן, ורק אחר כך מאתחלים ומייצרים.**
+
+1. תבקש מהמשתמש לפתוח בטלפון: וואטסאפ ← הגדרות ← **מכשירים מקושרים** ← **קישור מכשיר**, ולהישאר שם עם המצלמה פתוחה. אם הוא כבר היה שם — שיצא ויחזור, כדי שהמסך יהיה טרי. **תחכה שיגיד שהוא מוכן.**
+2. רק אז, תריץ סקריפט שמאתחל את הסשן ושומר QR טרי (לפי התבנית של `scp` + `ssh assistant bash /root/x.sh`):
+   ```bash
+   KEY=$(grep ^WAHA_API_KEY= .env | cut -d= -f2)
+   curl -s -X POST -H "X-Api-Key: $KEY" localhost:3000/api/sessions/default/stop > /dev/null
+   sleep 3
+   curl -s -X POST -H "X-Api-Key: $KEY" localhost:3000/api/sessions/default/start > /dev/null
+   # להמתין עד שהמצב הוא SCAN_QR_CODE, ואז:
+   curl -s -o /root/qr.png -H "X-Api-Key: $KEY" "localhost:3000/api/default/auth/qr?format=image"
    ```
-2. **סיסמת הדשבורד של WAHA:** המשתמש מריץ בעצמו `grep WAHA_DASHBOARD_PASSWORD whatsapp-assistant-bot/.env` בתוך החיבור, כדי שהסיסמה לא תעבור דרכך.
-3. בדפדפן: `http://localhost:3000/dashboard`, משתמש `admin`. בסשן `default` המשתמש סורק את ה-QR מהטלפון: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר.
+3. תמשוך את הקובץ עם `scp` ותשלח אותו למשתמש עם `SendUserFile`. הוא סורק מהמסך. הריבוע מתחלף כל ~20 שניות, אז אם פספס — תייצר חדש, זה לוקח שניות.
+4. **אם למשתמש אין מסך שני** (הוא על הטלפון בלבד), תשתמש בקוד בן 8 תווים במקום:
+   `POST /api/default/auth/request-code` עם `{"phoneNumber":"<המספר>"}` מחזיר למשל `{"code":"577F-MFWT"}`. בטלפון: קישור מכשיר ← **"קישור באמצעות מספר טלפון במקום זאת"** ← להזין את המספר ← להקליד את הקוד. ⚠️ זה איטי יותר מסריקה ולעיתים קרובות לא מספיקים בזמן.
+5. תאמת: המצב הוא `WORKING` והשדה `me` מכיל את המספר.
 
 ## שלב 8: בדיקה סופית
 - תריץ את הסקיל `server-health`.

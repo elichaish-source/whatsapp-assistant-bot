@@ -4,7 +4,7 @@
 # אפשר להריץ שוב בבטחה: שלבים שכבר בוצעו מדולגים.
 set -euo pipefail
 
-WAHA_VERSION="2026.9.2"
+WAHA_VERSION="2026.10.1"
 BACKUP_HOUR="3"
 
 cd "$(dirname "$0")/.."
