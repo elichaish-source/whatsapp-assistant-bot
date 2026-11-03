@@ -129,7 +129,7 @@ class TaskOut(ORMModel):
     title: str
     status: TaskStatus
     done_at: datetime | None
-    domain_id: int
+    domain_id: int | None
     task_type_id: int | None
     client_id: int | None
     project_id: int | None

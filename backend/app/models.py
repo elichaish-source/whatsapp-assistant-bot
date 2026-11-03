@@ -115,7 +115,9 @@ class Task(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
     done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id", ondelete="RESTRICT"), nullable=False)
+    # רשות. הבוט שומר מיד את מה שהבין, ומשימה בלי תחום מופיעה בדשבורד
+    # כ"ללא תחום" ומחכה לשיוך. עדיף מלעצור את המשתמש באמצע
+    domain_id: Mapped[int | None] = mapped_column(ForeignKey("domains.id", ondelete="RESTRICT"))
     task_type_id: Mapped[int | None] = mapped_column(ForeignKey("task_types.id", ondelete="RESTRICT"))
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="RESTRICT"))
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))

@@ -162,6 +162,16 @@ def test_add_task_saves_and_reports(db):
     assert outcome.task_id == task.id
 
 
+def test_add_task_saves_even_without_a_domain(db):
+    """הבוט לא עוצר כדי לשאול על תחום. זה היה הדבר הכי מעצבן בשימוש הראשון."""
+    outcome = actions.execute(db, Intent(action="add_task", title="להתקשר לזיצר"))
+    task = db.scalars(select(Task)).one()
+    assert task.domain_id is None
+    assert task.from_bot is True
+    assert "נשמר: להתקשר לזיצר" in outcome.reply
+    assert "לא שמרתי" not in outcome.reply
+
+
 def test_add_task_keeps_the_reminder_in_local_time(db):
     actions.execute(
         db,

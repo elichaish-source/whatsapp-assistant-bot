@@ -56,8 +56,16 @@ def test_clients_domain_requires_client(client):
     assert client.post("/api/tasks", json={"title": "חשבונית", "domain_id": dom["כספים"]}).status_code == 201
 
 
-def test_task_domain_required(client):
-    assert client.post("/api/tasks", json={"title": "בלי תחום"}).status_code == 422
+def test_task_is_saved_without_a_domain(client):
+    """תחום אינו חובה: עדיף לשמור ולשייך אחר כך מלעצור את המשתמש."""
+    r = client.post("/api/tasks", json={"title": "בלי תחום"})
+    assert r.status_code == 201
+    assert r.json()["domain_id"] is None
+    assert any(t["title"] == "בלי תחום" for t in client.get("/api/tasks").json())
+
+
+def test_a_domain_that_does_not_exist_is_still_rejected(client):
+    assert client.post("/api/tasks", json={"title": "משימה", "domain_id": 99999}).status_code == 422
 
 
 def test_task_inherits_from_project(client):

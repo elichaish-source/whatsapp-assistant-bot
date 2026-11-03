@@ -34,14 +34,16 @@ def resolve_task_fields(db: Session, body: TaskIn) -> dict:
                 raise _invalid("הפרויקט שייך ללקוח אחר")
             data["client_id"] = project.client_id
 
-    if data["domain_id"] is None:
-        raise _invalid("חובה לבחור תחום")
-    domain = db.get(Domain, data["domain_id"])
-    if not domain:
-        raise _invalid("תחום לא קיים")
+    # תחום אינו חובה: משימה בלי תחום נשמרת ומחכה לשיוך. הכלל "מחייב לקוח"
+    # נבדק רק כשתחום כזה אכן נבחר
+    domain = None
+    if data["domain_id"] is not None:
+        domain = db.get(Domain, data["domain_id"])
+        if not domain:
+            raise _invalid("תחום לא קיים")
     if data["client_id"] is not None and not db.get(Client, data["client_id"]):
         raise _invalid("לקוח לא קיים")
-    if domain.requires_client and data["client_id"] is None:
+    if domain is not None and domain.requires_client and data["client_id"] is None:
         raise _invalid(f"בתחום \"{domain.name}\" חובה לבחור לקוח")
     if data["task_type_id"] is not None and not db.get(TaskType, data["task_type_id"]):
         raise _invalid("סוג משימה לא קיים")

@@ -115,7 +115,7 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
                   {t.title}
                 </div>
                 <div className="task-meta">
-                  <span className="pill">{nameOf(domains, t.domain_id)}</span>
+                  <span className="pill">{nameOf(domains, t.domain_id) || "ללא תחום"}</span>
                   {t.task_type_id && <span>{nameOf(taskTypes, t.task_type_id)}</span>}
                   {t.client_id && fixed.client_id === undefined && <span>👤 {nameOf(clients, t.client_id)}</span>}
                   {t.project_id && <span>📁 {nameOf(projects, t.project_id)}</span>}
