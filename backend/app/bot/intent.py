@@ -26,6 +26,7 @@ Action = Literal[
     "complete_task",
     "list_tasks",
     "cancel_last",
+    "update_last",
     "clarify",
     "unknown",
 ]
@@ -90,7 +91,15 @@ INTENT_SCHEMA: dict = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["add_task", "complete_task", "list_tasks", "cancel_last", "clarify", "unknown"],
+            "enum": [
+                "add_task",
+                "complete_task",
+                "list_tasks",
+                "cancel_last",
+                "update_last",
+                "clarify",
+                "unknown",
+            ],
         },
         "title": _nullable("string"),
         "domain_id": _nullable("integer"),
@@ -135,6 +144,8 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - complete_task: המשתמש מדווח שסיים. "סיימתי 3", "דיברתי עם דני", "בוצע".
 - list_tasks: המשתמש רוצה לראות מה יש. "מה יש לי היום", "רשימה", "מה פתוח".
 - cancel_last: המשתמש מבטל את מה שנשמר הרגע. "בטל", "לא התכוונתי".
+- update_last: המשתמש מתקן את המשימה שנשמרה הרגע. "בעצם ביום חמישי", "זה דחוף",
+  "תשייך את זה לדני", "לא, בשתיים". מלא רק את השדות שמשתנים וכל השאר null.
 - clarify: הבנת את סוג הפעולה אבל חסר לך פרט הכרחי. כתוב ב-question שאלה אחת
   קצרה בעברית שתפתור את הספק. השתמש בזה גם כששם הלקוח שהוזכר מתאים ליותר
   מלקוח אחד ברשימה.
@@ -154,17 +165,25 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   "בצהריים" = 13:00, "בערב" = 19:00. בלי שעה מפורשת ובלי בקשת תזכורת — null.
 - priority: high רק כשהמשתמש אמר במפורש שזה דחוף או חשוב.
 - notes: רק פרטים שלא נכנסו ל-title ושווה לשמור, אחרת null.
+- אם מופיעה "השיחה עד עכשיו", היא שם רק כדי להבין הודעת המשך: "בעצם...",
+  "במקום", "גם", או תשובה לשאלה ששאלת קודם (clarify) — ואז הרכב את הכוונה
+  המלאה מההודעה הקודמת יחד עם התשובה החדשה. פעל תמיד לפי ההודעה החדשה בלבד,
+  ואל תבצע שוב בקשה שכבר נענתה בשיחה.
 - כל שדה שאינו רלוונטי לפעולה שבחרת — null."""
 
 
-def build_user_message(message: str, context: str, now: datetime) -> str:
-    """בונה את תוכן ההודעה למודל: קודם ההקשר, ובסוף ההודעה עצמה."""
+def build_user_message(message: str, context: str, now: datetime, history: str = "") -> str:
+    """בונה את תוכן ההודעה למודל: ההקשר, השיחה הקודמת, ובסוף ההודעה עצמה."""
     weekdays = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
     stamp = f"{now:%Y-%m-%d %H:%M} (יום {weekdays[now.weekday()]})"
-    return f"עכשיו: {stamp}\n\n{context}\n\nההודעה:\n{message}"
+    parts = [f"עכשיו: {stamp}", context]
+    if history:
+        parts.append(history)
+    parts.append(f"ההודעה:\n{message}")
+    return "\n\n".join(parts)
 
 
-def extract(message: str, context: str, now: datetime) -> IntentResult:
+def extract(message: str, context: str, now: datetime, history: str = "") -> IntentResult:
     """שולח את ההודעה למודל ומחזיר כוונה מאומתת.
 
     זורק IntentError על כל כשל — מפתח חסר, תקלת רשת, או תשובה שלא עומדת בסכימה.
@@ -184,7 +203,9 @@ def extract(message: str, context: str, now: datetime) -> IntentResult:
             model=settings.claude_model,
             max_tokens=4096,
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": build_user_message(message, context, now)}],
+            messages=[
+                {"role": "user", "content": build_user_message(message, context, now, history)}
+            ],
             output_config={
                 "effort": settings.claude_effort,
                 "format": {"type": "json_schema", "schema": INTENT_SCHEMA},

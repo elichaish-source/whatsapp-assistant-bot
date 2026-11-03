@@ -24,6 +24,13 @@ from .intent import Intent
 CANCEL_WINDOW = timedelta(hours=2)
 LIST_LIMIT = 15
 
+# כמה מההתכתבות הקודמת נשלחת למודל. החלון קצר בכוונה: ארוך מספיק כדי
+# שהודעת המשך ("בעצם ביום חמישי") תתחבר לקודמתה, וקצר מכדי שהודעה מלפני
+# שעה תבלבל את הפענוח.
+HISTORY_WINDOW = timedelta(minutes=15)
+HISTORY_EXCHANGES = 6
+HISTORY_LINE_CHARS = 200
+
 
 def local_tz() -> ZoneInfo:
     return ZoneInfo(get_settings().timezone)
@@ -71,6 +78,38 @@ def build_context(db: Session) -> str:
         for item in projects:
             lines.append(f"  {item.id}: {item.name}, לקוח {item.client_id or '-'}")
 
+    return "\n".join(lines)
+
+
+def _one_line(text: str) -> str:
+    """מכווץ תשובה רב-שורתית לשורה אחת קצרה, כדי שההיסטוריה תישאר זולה."""
+    return " ".join((text or "").split())[:HISTORY_LINE_CHARS]
+
+
+def build_history(db: Session, before_id: int) -> str:
+    """חילופי הדברים האחרונים בצ'אט, מהישן לחדש. מחרוזת ריקה כשאין.
+
+    בלי זה כל הודעה היא שיחה חדשה, ושאלת הבהרה של הבוט לא יכולה לקבל
+    תשובה: הוא שואל "לאיזה לקוח?" ואז לא זוכר על מה שאל.
+    """
+    rows = db.scalars(
+        select(BotMessage)
+        .where(
+            BotMessage.id < before_id,
+            BotMessage.reply.is_not(None),
+            BotMessage.created_at >= now() - HISTORY_WINDOW,
+        )
+        .order_by(BotMessage.id.desc())
+        .limit(HISTORY_EXCHANGES)
+    ).all()
+    if not rows:
+        return ""
+
+    lines = ["השיחה עד עכשיו (ישן → חדש):"]
+    for row in reversed(list(rows)):
+        stamp = f"{to_local(row.created_at):%H:%M}"
+        lines.append(f"[{stamp}] אני: {_one_line(row.body or '')}")
+        lines.append(f"[{stamp}] העוזר: {_one_line(row.reply or '')}")
     return "\n".join(lines)
 
 
@@ -266,14 +305,22 @@ def _list_tasks(db: Session, intent: Intent) -> Outcome:
     )
 
 
-def _cancel_last(db: Session) -> Outcome:
-    """מבטל את המשימה שהבוט יצר לאחרונה. לא נוגע במשימות מהדשבורד."""
-    row = db.scalars(
+def _last_bot_task_row(db: Session) -> BotMessage | None:
+    """ההודעה האחרונה שבעקבותיה הבוט יצר או עדכן משימה."""
+    return db.scalars(
         select(BotMessage)
-        .where(BotMessage.intent == "add_task", BotMessage.task_id.is_not(None))
+        .where(
+            BotMessage.intent.in_(("add_task", "update_last")),
+            BotMessage.task_id.is_not(None),
+        )
         .order_by(BotMessage.id.desc())
         .limit(1)
     ).first()
+
+
+def _cancel_last(db: Session) -> Outcome:
+    """מבטל את המשימה שהבוט יצר לאחרונה. לא נוגע במשימות מהדשבורד."""
+    row = _last_bot_task_row(db)
     if not row or not row.task_id:
         return Outcome("אין מה לבטל.")
     if row.created_at and now() - aware(row.created_at) > CANCEL_WINDOW:
@@ -291,6 +338,70 @@ def _cancel_last(db: Session) -> Outcome:
     return Outcome(f"בוטל: {title}")
 
 
+# שדות שהם מזהה לרשומה אחרת. מאמתים שהמזהה קיים לפני שכותבים אותו, כי
+# מזהה מומצא היה מפיל את העדכון על מפתח זר ברקע, בלי שהמשתמש יקבל תשובה.
+_LOOKUP_FIELDS = {
+    "domain_id": Domain,
+    "task_type_id": TaskType,
+    "client_id": Client,
+    "project_id": Project,
+}
+
+
+def _update_last(db: Session, intent: Intent) -> Outcome:
+    """מתקן את המשימה האחרונה: "בעצם ביום חמישי", "זה דחוף", "תשייך לדני".
+
+    רק שדות שהמודל מילא משתנים. אי אפשר לנקות שדה בדרך הזאת, כי null
+    פירושו "לא הוזכר" ולא "למחוק" — ניקוי נעשה בדשבורד.
+    """
+    row = _last_bot_task_row(db)
+    if not row or not row.task_id:
+        return Outcome("אין משימה אחרונה לעדכן.")
+    if row.created_at and now() - aware(row.created_at) > CANCEL_WINDOW:
+        return Outcome("עבר יותר מדי זמן מאז השמירה. אפשר לערוך בדשבורד.")
+
+    task = db.get(Task, row.task_id)
+    if not task:
+        return Outcome("המשימה כבר לא קיימת.")
+    if not task.from_bot:
+        return Outcome("המשימה הזאת לא נוצרה מהבוט, אז לא אעדכן אותה.")
+
+    changed = False
+    if intent.title:
+        task.title = intent.title[:500]
+        changed = True
+    for field, model in _LOOKUP_FIELDS.items():
+        value = getattr(intent, field)
+        if value is not None and db.get(model, value) is not None:
+            setattr(task, field, value)
+            changed = True
+    if intent.priority:
+        task.priority = intent.priority
+        changed = True
+    if intent.notes:
+        task.notes = intent.notes
+        changed = True
+
+    due = _parse_due(intent.due_date)
+    if due:
+        task.due_date = due
+        changed = True
+    reminder = _parse_reminder(intent.reminder_at)
+    if reminder:
+        task.reminder_at = reminder
+        # תזכורת חדשה צריכה לצאת גם אם הקודמת כבר נשלחה
+        task.reminder_sent_at = None
+        changed = True
+
+    if not changed:
+        return Outcome("לא הבנתי מה לשנות במשימה.")
+
+    db.commit()
+    db.refresh(task)
+    detail = describe(db, task)
+    return Outcome(f"עודכן: {task.title}" + (f"\n{detail}" if detail else ""), task_id=task.id)
+
+
 def execute(db: Session, intent: Intent) -> Outcome:
     if intent.action == "add_task":
         return _add_task(db, intent)
@@ -300,6 +411,8 @@ def execute(db: Session, intent: Intent) -> Outcome:
         return _list_tasks(db, intent)
     if intent.action == "cancel_last":
         return _cancel_last(db)
+    if intent.action == "update_last":
+        return _update_last(db, intent)
     if intent.action == "clarify":
         return Outcome(intent.question or "לא הבנתי. אפשר לנסח שוב?")
     return Outcome('לא הבנתי. אפשר לכתוב למשל "תזכיר לי מחר ב-10 להתקשר לדני" או "רשימה".')

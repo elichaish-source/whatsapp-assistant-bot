@@ -82,7 +82,12 @@ def handle_message(wa_message_id: str, body: str) -> None:
         ).one()
         settings = get_settings()
         try:
-            result = extract(body, actions.build_context(db), actions.now_local())
+            result = extract(
+                body,
+                actions.build_context(db),
+                actions.now_local(),
+                actions.build_history(db, row.id),
+            )
         except IntentError as exc:
             log.warning("פענוח ההודעה נכשל: %s", exc)
             row.error = str(exc)
