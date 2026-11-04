@@ -111,6 +111,7 @@ def handle_message(wa_message_id: str, body: str) -> None:
         row.reply = outcome.reply
         row.task_id = outcome.task_id
         row.fact_id = outcome.fact_id
+        row.recurrence_id = outcome.recurrence_id
         row.listed_task_ids = (
             ",".join(str(item) for item in outcome.listed_task_ids)
             if outcome.listed_task_ids

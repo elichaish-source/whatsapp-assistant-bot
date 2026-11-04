@@ -72,3 +72,33 @@ export interface MemoryDimension {
   // האם עובדות בממד הזה נשלחות לבוט בשלב הנוכחי
   in_prompt: boolean;
 }
+
+export type RepeatUnit = "week" | "month" | "year";
+
+export interface Recurrence {
+  id: number;
+  title: string;
+  interval_unit: RepeatUnit;
+  interval_count: number;
+  start_date: string;
+  cycle: number;
+  lead_days: number;
+  domain_id: number | null;
+  task_type_id: number | null;
+  client_id: number | null;
+  project_id: number | null;
+  priority: Priority;
+  notes: string | null;
+  active: boolean;
+  from_bot: boolean;
+  // מחושבים בשרת: התאריך הבא, תיאור התדירות, והמשימה הפתוחה של המחזור הנוכחי
+  next_due: string | null;
+  every: string;
+  open_task_id: number | null;
+}
+
+export const REPEAT_LABELS: Record<RepeatUnit, string> = {
+  week: "שבועות",
+  month: "חודשים",
+  year: "שנים",
+};

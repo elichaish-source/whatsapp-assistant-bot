@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 # הפעולות שהבוט יודע לבצע בשלב 2א
 Action = Literal[
     "add_task",
+    "add_recurring",
     "complete_task",
     "list_tasks",
     "cancel_last",
@@ -47,6 +48,10 @@ class Intent(BaseModel):
     reminder_at: str | None = None  # YYYY-MM-DDTHH:MM בשעון ישראל
     priority: Literal["low", "normal", "high"] | None = None
     notes: str | None = None
+    # add_recurring
+    repeat_unit: Literal["week", "month", "year"] | None = None
+    repeat_count: int | None = None
+    lead_days: int | None = None
     # remember
     fact: str | None = None
     dimension: int | None = None
@@ -97,6 +102,7 @@ INTENT_SCHEMA: dict = {
             "type": "string",
             "enum": [
                 "add_task",
+                "add_recurring",
                 "complete_task",
                 "list_tasks",
                 "cancel_last",
@@ -115,6 +121,9 @@ INTENT_SCHEMA: dict = {
         "reminder_at": _nullable("string"),
         "priority": _nullable_enum(["low", "normal", "high"]),
         "notes": _nullable("string"),
+        "repeat_unit": _nullable_enum(["week", "month", "year"]),
+        "repeat_count": _nullable("integer"),
+        "lead_days": _nullable("integer"),
         "fact": _nullable("string"),
         "dimension": _nullable("integer"),
         "task_number": _nullable("integer"),
@@ -133,6 +142,9 @@ INTENT_SCHEMA: dict = {
         "reminder_at",
         "priority",
         "notes",
+        "repeat_unit",
+        "repeat_count",
+        "lead_days",
         "fact",
         "dimension",
         "task_number",
@@ -150,6 +162,13 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 
 הפעולות:
 - add_task: המשתמש רוצה לזכור לעשות משהו. "תזכיר לי...", "צריך להתקשר ל...", "לא לשכוח...".
+- add_recurring: המשתמש רוצה התחייבות שחוזרת מעצמה, ולא משימה חד-פעמית.
+  "כל חודשיים ב-15 דוח מע"מ", "כל שנה ב-1 במרץ לחדש את הביטוח", "כל יום שני
+  לעבור על הגבייה". ב-repeat_unit אחד מ-week, month או year, וב-repeat_count
+  כמה יחידות בין מחזור למחזור — "כל חודשיים" הם month ו-2, "כל שבוע" הם
+  week ו-1. ב-due_date התאריך של המחזור הראשון, תאריך מלא, גם אם המשתמש
+  אמר רק "ב-15" או "ביום שני". אם ביקש שיזכירו לו מראש ("שבועיים לפני"),
+  כתוב את מספר הימים ב-lead_days.
 - complete_task: המשתמש מדווח שסיים. "סיימתי 3", "דיברתי עם דני", "בוצע".
 - list_tasks: המשתמש רוצה לראות מה יש. "מה יש לי היום", "רשימה", "מה פתוח".
 - cancel_last: המשתמש מבטל את מה שנשמר הרגע. "בטל", "לא התכוונתי".
@@ -168,6 +187,8 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - unknown: ההודעה לא קשורה לניהול משימות בכלל.
 
 כללים:
+- add_task או add_recurring? "כל", "מדי" או "פעם ב..." יחד עם תדירות הם חזרה.
+  תאריך אחד, גם רחוק ("בעוד שנה"), הוא משימה רגילה.
 - title הוא מה שצריך לעשות, בלשון מקור וקצר: "להתקשר לדני", "לשלוח חוזה לאיתן".
   אל תכלול בו את הזמן.
 - בחר domain_id, task_type_id, client_id ו-project_id רק מהרשימות שבהודעה,

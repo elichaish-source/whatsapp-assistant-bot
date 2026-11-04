@@ -13,10 +13,10 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from .. import memory
+from .. import memory, recurring
 from ..auth import aware, now
 from ..config import get_settings
-from ..models import BotMessage, Client, Domain, MemoryFact, Project, Task, TaskType
+from ..models import BotMessage, Client, Domain, MemoryFact, Project, Recurrence, Task, TaskType
 from ..routers.tasks import resolve_task_fields
 from ..schemas import TaskIn
 from .intent import Intent
@@ -162,12 +162,14 @@ class Outcome:
         reply: str,
         task_id: int | None = None,
         listed_task_ids: list[int] | None = None,
+        recurrence_id: int | None = None,
         fact_id: int | None = None,
     ) -> None:
         self.reply = reply
         self.task_id = task_id
         self.listed_task_ids = listed_task_ids or []
         self.fact_id = fact_id
+        self.recurrence_id = recurrence_id
 
 
 def _parse_due(value: str | None) -> date | None:
@@ -227,6 +229,74 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
     if detail:
         reply += f"\n{detail}"
     return Outcome(reply + '\nלביטול כתוב "בטל".', task_id=task.id)
+
+
+def _add_recurring(db: Session, intent: Intent) -> Outcome:
+    """רושם התחייבות שחוזרת מעצמה: "כל חודשיים ב-15 דוח מע"מ".
+
+    ההתחייבות עצמה אינה משימה — היא מייצרת משימה בכל מחזור. אם חלון ההתראה
+    של המחזור הראשון כבר נפתח, המשימה נוצרת כאן ומיד, ולא בסבב הבא של
+    הלולאה, כדי שהתשובה שתקבל תהיה נכונה גם רגע אחרי השמירה.
+    """
+    if not intent.title:
+        return Outcome("לא הבנתי מה ההתחייבות. אפשר לנסח שוב?")
+    if intent.repeat_unit not in ("week", "month", "year"):
+        return Outcome('לא הבנתי כל כמה זמן זה חוזר. אפשר לכתוב למשל "כל חודשיים"?')
+
+    start = _parse_due(intent.due_date)
+    if not start:
+        return Outcome('ממתי מתחילים? אפשר לכתוב תאריך, למשל "מה-15 בחודש הבא".')
+
+    body = TaskIn(
+        title=intent.title[:500],
+        domain_id=intent.domain_id,
+        task_type_id=intent.task_type_id,
+        client_id=intent.client_id,
+        project_id=intent.project_id,
+        priority=intent.priority or "normal",
+        notes=intent.notes,
+    )
+    try:
+        # אותם כללי שיוך של משימה: הסיווג יעבור לכל מחזור, אז עדיף שייפול
+        # כאן פעם אחת ולא בכל מחזור מחדש
+        data = resolve_task_fields(db, body)
+    except HTTPException as exc:
+        return Outcome(f"לא שמרתי: {exc.detail}")
+
+    rec = Recurrence(
+        title=data["title"],
+        interval_unit=intent.repeat_unit,
+        interval_count=min(max(intent.repeat_count or 1, 1), 60),
+        start_date=start,
+        cycle=0,
+        lead_days=min(max(intent.lead_days or 0, 0), 365),
+        domain_id=data["domain_id"],
+        task_type_id=data["task_type_id"],
+        client_id=data["client_id"],
+        project_id=data["project_id"],
+        priority=data["priority"],
+        notes=data["notes"],
+        from_bot=True,
+    )
+    # תאריך התחלה שעבר לא מייצר משימה באיחור, אלא מדלג למחזור הבא
+    recurring.catch_up(rec, now_local().date())
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+
+    every = recurring.describe_interval(rec.interval_unit, rec.interval_count)
+    memory.observe(
+        "recurrence_created", "bot", client_id=rec.client_id, detail=f"{rec.title} · {every}"
+    )
+
+    due = recurring.next_due(rec)
+    recurring.materialize(db, now_local())
+
+    parts = [every, f"הפעם הבאה {due:%d/%m/%Y}"]
+    if rec.lead_days:
+        parts.append(f"התראה {rec.lead_days} ימים לפני")
+    reply = f"נשמר כהתחייבות חוזרת: {rec.title}\n" + " · ".join(parts)
+    return Outcome(reply + '\nלביטול כתוב "בטל".', recurrence_id=rec.id)
 
 
 def _resolve_by_number(db: Session, number: int) -> Task | None:
@@ -329,11 +399,11 @@ def _last_bot_task_row(db: Session) -> BotMessage | None:
 
 
 # מה ש"בטל" יודע לבטל: משימה שנוצרה, תיקון שלה, או עובדה שנרשמה בזיכרון
-_UNDOABLE = ("add_task", "update_last", "remember")
+_UNDOABLE = ("add_task", "add_recurring", "update_last", "remember")
 
 
 def _last_bot_action_row(db: Session) -> BotMessage | None:
-    """ההודעה האחרונה שבעקבותיה הבוט שינה משהו — משימה או עובדה.
+    """ההודעה האחרונה שבעקבותיה הבוט שינה משהו — משימה, עובדה או התחייבות.
 
     דורשת שמשהו אכן נשמר, כי הודעה שנכשלה ("לא הבנתי מה המשימה") לא אמורה
     לחסום את הביטול של מה שנשמר לפניה.
@@ -342,7 +412,11 @@ def _last_bot_action_row(db: Session) -> BotMessage | None:
         select(BotMessage)
         .where(
             BotMessage.intent.in_(_UNDOABLE),
-            or_(BotMessage.task_id.is_not(None), BotMessage.fact_id.is_not(None)),
+            or_(
+                BotMessage.task_id.is_not(None),
+                BotMessage.fact_id.is_not(None),
+                BotMessage.recurrence_id.is_not(None),
+            ),
         )
         .order_by(BotMessage.id.desc())
         .limit(1)
@@ -350,7 +424,7 @@ def _last_bot_action_row(db: Session) -> BotMessage | None:
 
 
 def _cancel_last(db: Session) -> Outcome:
-    """מבטל את הדבר האחרון שהבוט עשה: משימה שיצר או עובדה שרשם.
+    """מבטל את הדבר האחרון שהבוט עשה: משימה, עובדה או התחייבות חוזרת.
 
     לא נוגע במשימות מהדשבורד — מה שלא נוצר מהבוט לא נמחק ממנו.
     """
@@ -369,6 +443,22 @@ def _cancel_last(db: Session) -> Outcome:
         db.commit()
         memory.observe("fact_removed", "bot", detail=content)
         return Outcome(f"נמחק מהזיכרון: {content}")
+
+    if row.recurrence_id:
+        rec = db.get(Recurrence, row.recurrence_id)
+        if not rec:
+            return Outcome("ההתחייבות הזאת כבר לא קיימת.")
+        title = rec.title
+        # המשימה שההתחייבות הספיקה לייצר נמחקת איתה. בלעדיה היא הייתה
+        # נשארת ברשימה בלי שיהיה ברור מאיפה היא באה
+        for task in db.scalars(
+            select(Task).where(Task.recurrence_id == rec.id, Task.status == "open")
+        ).all():
+            db.delete(task)
+        db.delete(rec)
+        db.commit()
+        memory.observe("recurrence_cancelled", "bot", detail=title)
+        return Outcome(f"בוטלה ההתחייבות החוזרת: {title}")
 
     task = db.get(Task, row.task_id)
     if not task:
@@ -491,6 +581,8 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
 def execute(db: Session, intent: Intent) -> Outcome:
     if intent.action == "add_task":
         return _add_task(db, intent)
+    if intent.action == "add_recurring":
+        return _add_recurring(db, intent)
     if intent.action == "complete_task":
         return _complete_task(db, intent)
     if intent.action == "list_tasks":
