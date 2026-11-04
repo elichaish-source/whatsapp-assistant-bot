@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import auth, waha
+from .. import auth, memory, waha
 from ..bot import actions
 from ..bot.intent import IntentError, extract
 from ..config import get_settings
@@ -81,12 +81,15 @@ def handle_message(wa_message_id: str, body: str) -> None:
             select(BotMessage).where(BotMessage.wa_message_id == wa_message_id)
         ).one()
         settings = get_settings()
+        # כלל הברזל: בלי זיכרון הבוט עובד בדיוק כמו קודם
+        memory_block = memory.build_block(db)
         try:
             result = extract(
                 body,
                 actions.build_context(db),
                 actions.now_local(),
                 actions.build_history(db, row.id),
+                memory_block,
             )
         except IntentError as exc:
             log.warning("פענוח ההודעה נכשל: %s", exc)
@@ -97,6 +100,8 @@ def handle_message(wa_message_id: str, body: str) -> None:
             return
 
         row.intent = result.intent.action
+        # הבלוק שהוזרק נשמר כמו שהוא, כדי שתמיד נדע על סמך מה הבוט החליט
+        row.memory_used = memory_block or None
         row.input_tokens = result.input_tokens
         row.output_tokens = result.output_tokens
         row.cached_tokens = result.cached_tokens
@@ -105,6 +110,7 @@ def handle_message(wa_message_id: str, body: str) -> None:
         outcome = actions.execute(db, result.intent)
         row.reply = outcome.reply
         row.task_id = outcome.task_id
+        row.fact_id = outcome.fact_id
         row.listed_task_ids = (
             ",".join(str(item) for item in outcome.listed_task_ids)
             if outcome.listed_task_ids

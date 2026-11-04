@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
+from .. import memory
 from ..auth import now, require_user
 from ..db import get_db
 from ..models import Client, Domain, Project, Task, TaskType
@@ -105,6 +106,43 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
     return _get(db, task_id)
 
 
+# השדות שתיקון שלהם בדשבורד הוא אות ללמידה. דחייה של תאריך ושינוי סיווג הם
+# המקור החזק ביותר: שם אתה מלמד את המערכת בלי לכתוב "תזכור ש..."
+_TRACKED = ("status", "due_date", "domain_id", "task_type_id", "client_id", "project_id", "priority")
+
+_CHANGE_KINDS = {
+    "status": "task_status_changed",
+    "due_date": "task_rescheduled",
+    "domain_id": "task_reclassified",
+    "task_type_id": "task_reclassified",
+    "client_id": "task_reclassified",
+    "project_id": "task_reclassified",
+    "priority": "task_reprioritized",
+}
+
+
+def _snapshot(task: Task) -> dict:
+    return {field: getattr(task, field) for field in _TRACKED}
+
+
+def _log_changes(task: Task, before: dict, after: dict) -> None:
+    """רושם ביומן האירועים כל שדה שהשתנה. לכתיבה בלבד, אף אחד לא קורא עדיין."""
+    for field in _TRACKED:
+        if before[field] == after[field]:
+            continue
+        kind = _CHANGE_KINDS[field]
+        # דחייה היא לא כל שינוי תאריך. היא זו שמלמדת מה אתה כל הזמן מזיז
+        if field == "due_date" and before[field] and after[field] and after[field] > before[field]:
+            kind = "task_postponed"
+        memory.observe(
+            kind,
+            "dashboard",
+            task_id=task.id,
+            client_id=task.client_id,
+            detail=f"{task.title} · {field}: {before[field]} → {after[field]}",
+        )
+
+
 @router.post("", response_model=TaskOut, status_code=201)
 def create_task(body: TaskIn, db: Session = Depends(get_db)):
     data = resolve_task_fields(db, body)
@@ -114,6 +152,9 @@ def create_task(body: TaskIn, db: Session = Depends(get_db)):
     db.add(task)
     db.commit()
     db.refresh(task)
+    memory.observe(
+        "task_created", "dashboard", task_id=task.id, client_id=task.client_id, detail=task.title
+    )
     return task
 
 
@@ -121,25 +162,32 @@ def create_task(body: TaskIn, db: Session = Depends(get_db)):
 def update_task(task_id: int, body: TaskIn, db: Session = Depends(get_db)):
     task = _get(db, task_id)
     data = resolve_task_fields(db, body)
+    before = _snapshot(task)
     _set_status(task, data.pop("status"))
     for key, value in data.items():
         setattr(task, key, value)
     db.commit()
     db.refresh(task)
+    _log_changes(task, before, _snapshot(task))
     return task
 
 
 @router.patch("/{task_id}/status", response_model=TaskOut)
 def set_task_status(task_id: int, body: TaskStatusIn, db: Session = Depends(get_db)):
     task = _get(db, task_id)
+    before = _snapshot(task)
     _set_status(task, body.status)
     db.commit()
     db.refresh(task)
+    _log_changes(task, before, _snapshot(task))
     return task
 
 
 @router.delete("/{task_id}")
 def delete_task(task_id: int, db: Session = Depends(get_db)):
-    db.delete(_get(db, task_id))
+    task = _get(db, task_id)
+    title, client_id = task.title, task.client_id
+    db.delete(task)
     db.commit()
+    memory.observe("task_deleted", "dashboard", client_id=client_id, detail=title)
     return {"ok": True}

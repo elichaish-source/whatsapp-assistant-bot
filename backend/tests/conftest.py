@@ -39,7 +39,8 @@ def clean_db():
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE bot_messages, tasks, projects, client_family_links, clients,"
+                "TRUNCATE bot_messages, observations, memory_facts, tasks, projects,"
+                " client_family_links, clients,"
                 " login_codes, auth_sessions RESTART IDENTITY CASCADE"
             )
         )

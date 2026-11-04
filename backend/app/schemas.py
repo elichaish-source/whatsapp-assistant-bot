@@ -159,3 +159,40 @@ class VerifyCodeIn(BaseModel):
 
 class MeOut(BaseModel):
     phone: str
+
+
+# --- זיכרון ---
+
+
+class MemoryFactIn(BaseModel):
+    # הממד הוא 1–9 לפי טבלת הממדים ב-SPEC-ASSISTANT.md, סעיף 2
+    dimension: int = Field(ge=1, le=9)
+    content: str = Field(min_length=1, max_length=1000)
+    client_id: int | None = None
+    project_id: int | None = None
+
+    @field_validator("content")
+    @classmethod
+    def squeeze_content(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("תוכן לא יכול להיות ריק")
+        return v
+
+
+class MemoryFactOut(ORMModel):
+    id: int
+    dimension: int
+    content: str
+    client_id: int | None
+    project_id: int | None
+    source: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DimensionOut(BaseModel):
+    id: int
+    name: str
+    # האם עובדות בממד הזה נשלחות לבוט בשלב הנוכחי
+    in_prompt: bool
