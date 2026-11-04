@@ -239,7 +239,7 @@ def test_a_recurrence_is_created_read_and_deleted(client, db):
     assert body["open_task_id"] is None
 
     assert [item["id"] for item in client.get("/api/recurrences").json()] == [body["id"]]
-    assert client.delete(f"/api/recurrences/{body['id']}").status_code == 204
+    assert client.delete(f"/api/recurrences/{body['id']}").status_code == 200
     assert client.get("/api/recurrences").json() == []
     assert kinds(db) == ["recurrence_created", "recurrence_removed"]
 
@@ -307,7 +307,7 @@ def test_deleting_a_recurrence_keeps_the_tasks_it_created(client, db):
     rec = recurrence(db, start_date=date(2026, 11, 4), interval_unit="year")
     recurring.materialize(db, moment("2026-11-04"))
 
-    assert client.delete(f"/api/recurrences/{rec.id}").status_code == 204
+    assert client.delete(f"/api/recurrences/{rec.id}").status_code == 200
     task = tasks(db)[0]
     db.refresh(task)
     assert task.recurrence_id is None

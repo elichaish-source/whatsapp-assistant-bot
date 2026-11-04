@@ -24,7 +24,7 @@ docker run --rm --network "$NET" -v $SRC/backend:/app -w /app \
   -e TEST_DATABASE_URL="postgresql+psycopg://assistant:$PASS@db:5432/$DB" \
   -e PYTHONDONTWRITEBYTECODE=1 \
   python:3.12-slim \
-  sh -c 'pip install -q -r requirements.txt -r requirements-dev.txt && python -m pytest -q 2>&1 | tail -40'
+  bash -c 'set -o pipefail; pip install -q -r requirements.txt -r requirements-dev.txt && python -m pytest -q 2>&1 | tail -40'
 CODE=$?
 
 # ניקוי: הבסיס הזמני והקוד שהורד

@@ -120,8 +120,8 @@ def update_recurrence(
     return row
 
 
-@router.delete("/{recurrence_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_recurrence(recurrence_id: int, db: Session = Depends(get_db)) -> None:
+@router.delete("/{recurrence_id}")
+def delete_recurrence(recurrence_id: int, db: Session = Depends(get_db)) -> dict:
     """מוחק את ההתחייבות. המשימות שהיא יצרה נשארות, כמשימות רגילות.
 
     זאת הסיבה שיש גם ``active``: כיבוי עוצר את המחזורים הבאים בלי למחוק
@@ -132,3 +132,4 @@ def delete_recurrence(recurrence_id: int, db: Session = Depends(get_db)) -> None
     db.delete(rec)
     db.commit()
     memory.observe("recurrence_removed", "dashboard", client_id=client_id, detail=title)
+    return {"ok": True}
