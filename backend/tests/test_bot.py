@@ -21,8 +21,8 @@ from app.bot.intent import (
     build_user_message,
     extract,
 )
-from app import memory
-from app.models import BotMessage, Client, Domain, MemoryFact, Observation, Task
+from app import memory, recurring
+from app.models import BotMessage, Client, Domain, MemoryFact, Observation, Recurrence, Task
 from app.routers import bot as bot_router
 
 OWNER = "972501234567"
@@ -142,7 +142,7 @@ def test_no_enum_sits_next_to_a_list_of_types():
 
 
 def test_nullable_enums_are_written_as_anyof():
-    for name in ("priority", "list_filter"):
+    for name in ("priority", "list_filter", "repeat_unit"):
         options = INTENT_SCHEMA["properties"][name]["anyOf"]
         assert {"type": "null"} in options, name
         assert any("enum" in option for option in options), name
@@ -627,6 +627,120 @@ def test_a_broken_memory_leaves_the_block_empty():
             raise RuntimeError("בסיס הנתונים לא זמין")
 
     assert memory.build_block(Broken()) == ""
+
+
+# --- התחייבויות חוזרות ---
+
+
+def recurrences(db) -> list[Recurrence]:
+    return list(db.scalars(select(Recurrence).order_by(Recurrence.id)).all())
+
+
+def test_the_bot_saves_a_recurring_commitment(db):
+    outcome = actions.execute(
+        db,
+        Intent(
+            action="add_recurring",
+            title="להגיש דוח מע״מ",
+            repeat_unit="month",
+            repeat_count=2,
+            due_date="2027-01-15",
+            lead_days=7,
+        ),
+    )
+    rec = recurrences(db)[0]
+    assert rec.title == "להגיש דוח מע״מ"
+    assert (rec.interval_unit, rec.interval_count) == ("month", 2)
+    assert rec.start_date == date(2027, 1, 15)
+    assert rec.lead_days == 7
+    assert rec.from_bot is True
+    assert outcome.recurrence_id == rec.id
+
+    assert "נשמר כהתחייבות חוזרת" in outcome.reply
+    assert "כל חודשיים" in outcome.reply
+    assert "15/01/2027" in outcome.reply
+    assert "התראה 7 ימים לפני" in outcome.reply
+    # מחזור עתידי: ההתחייבות נשמרה, אבל משימה עוד לא נוצרה
+    assert db.scalars(select(Task)).all() == []
+    assert kinds(db) == ["recurrence_created"]
+
+
+def test_a_commitment_that_starts_today_creates_its_task_at_once(db):
+    today = actions.now_local().date()
+    actions.execute(
+        db,
+        Intent(
+            action="add_recurring",
+            title="לעבור על הגבייה",
+            repeat_unit="week",
+            repeat_count=1,
+            due_date=today.isoformat(),
+        ),
+    )
+    task = db.scalars(select(Task)).one()
+    assert task.title == "לעבור על הגבייה"
+    assert task.due_date == today
+    assert task.recurrence_id == recurrences(db)[0].id
+
+
+def test_a_commitment_without_a_frequency_asks_again(db):
+    outcome = actions.execute(
+        db, Intent(action="add_recurring", title="משהו", due_date="2027-01-01")
+    )
+    assert "כל כמה זמן" in outcome.reply
+    assert recurrences(db) == []
+
+
+def test_a_commitment_without_a_date_asks_again(db):
+    outcome = actions.execute(
+        db, Intent(action="add_recurring", title="משהו", repeat_unit="month", repeat_count=1)
+    )
+    assert "ממתי" in outcome.reply
+    assert recurrences(db) == []
+
+
+def test_a_commitment_that_started_in_the_past_jumps_to_the_next_cycle(db):
+    """תאריך התחלה מלפני שנה לא מייצר משימה שהתאריך שלה עבר מזמן."""
+    today = actions.now_local().date()
+    actions.execute(
+        db,
+        Intent(
+            action="add_recurring",
+            title="חידוש ביטוח",
+            repeat_unit="year",
+            repeat_count=1,
+            due_date=(today - timedelta(days=400)).isoformat(),
+        ),
+    )
+    rec = recurrences(db)[0]
+    assert rec.cycle >= 1
+    assert recurring.next_due(rec) >= today
+
+
+def test_cancel_removes_the_commitment_and_the_task_it_created(db):
+    today = actions.now_local().date()
+    outcome = actions.execute(
+        db,
+        Intent(
+            action="add_recurring",
+            title="לעבור על הגבייה",
+            repeat_unit="week",
+            repeat_count=1,
+            due_date=today.isoformat(),
+        ),
+    )
+    db.add(
+        BotMessage(
+            wa_message_id="rec-1", intent="add_recurring", recurrence_id=outcome.recurrence_id
+        )
+    )
+    db.commit()
+
+    reply = actions.execute(db, Intent(action="cancel_last")).reply
+    assert "בוטלה ההתחייבות החוזרת" in reply
+    assert recurrences(db) == []
+    # המשימה שנוצרה נמחקת איתה, אחרת היא נשארת בלי שיהיה ברור מאיפה היא באה
+    assert db.scalars(select(Task)).all() == []
 
 
 # --- כוונות שאינן פעולה ---

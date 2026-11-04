@@ -196,3 +196,49 @@ class DimensionOut(BaseModel):
     name: str
     # האם עובדות בממד הזה נשלחות לבוט בשלב הנוכחי
     in_prompt: bool
+
+
+# --- התחייבויות חוזרות ---
+
+RepeatUnit = Literal["week", "month", "year"]
+
+
+class RecurrenceIn(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    interval_unit: RepeatUnit
+    interval_count: int = Field(default=1, ge=1, le=60)
+    # המחזור הראשון, וגם העוגן שממנו מחושבים כל הבאים
+    start_date: date
+    lead_days: int = Field(default=0, ge=0, le=365)
+    domain_id: int | None = None
+    task_type_id: int | None = None
+    client_id: int | None = None
+    project_id: int | None = None
+    priority: Priority = "normal"
+    notes: str | None = None
+    active: bool = True
+
+    _clean = field_validator("notes", mode="before")(_blank_to_none)
+
+
+class RecurrenceOut(ORMModel):
+    id: int
+    title: str
+    interval_unit: RepeatUnit
+    interval_count: int
+    start_date: date
+    cycle: int
+    lead_days: int
+    domain_id: int | None
+    task_type_id: int | None
+    client_id: int | None
+    project_id: int | None
+    priority: Priority
+    notes: str | None
+    active: bool
+    from_bot: bool
+    # שלושת אלה מחושבים ואינם עמודות: התאריך הבא, תיאור התדירות בעברית,
+    # והמשימה הפתוחה של המחזור הנוכחי — אם יש כזאת
+    next_due: date | None = None
+    every: str = ""
+    open_task_id: int | None = None

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from .bot.reminders import reminder_loop
 from .config import get_settings
-from .routers import auth, bot, clients, lookups, memory, projects, tasks
+from .routers import auth, bot, clients, lookups, memory, projects, recurrences, tasks
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-for module in (auth, lookups, clients, projects, tasks, memory, bot):
+for module in (auth, lookups, clients, projects, tasks, recurrences, memory, bot):
     app.include_router(module.router)
 
 

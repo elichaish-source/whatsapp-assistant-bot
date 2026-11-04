@@ -129,6 +129,10 @@ class Task(TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # נוצרה מהבוט בוואטסאפ ולא מהדשבורד
     from_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # ההתחייבות החוזרת שיצרה את המשימה. ריק במשימה רגילה
+    recurrence_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recurrences.id", ondelete="SET NULL")
+    )
 
 
 # --- כניסה לדשבורד ---
@@ -168,6 +172,10 @@ class BotMessage(Base):
     listed_task_ids: Mapped[str | None] = mapped_column(Text)
     # העובדה שנרשמה לזיכרון בעקבות ההודעה, כדי ש"בטל" ידע למחוק אותה
     fact_id: Mapped[int | None] = mapped_column(ForeignKey("memory_facts.id", ondelete="SET NULL"))
+    # ההתחייבות החוזרת שנרשמה בעקבות ההודעה, כדי ש"בטל" ידע לבטל אותה
+    recurrence_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recurrences.id", ondelete="SET NULL")
+    )
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     cached_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -246,3 +254,51 @@ class Observation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# --- התחייבויות חוזרות ---
+
+
+class Recurrence(TimestampMixin, Base):
+    """התחייבות שחוזרת מעצמה: דוח מע"מ כל חודשיים, ביטוח כל שנה.
+
+    נרשמת פעם אחת, ומייצרת **משימה אמיתית** בכל מחזור במקום להזיז תאריך
+    באותה שורה. ככה נשמרת היסטוריה — אפשר לראות שהדוח אכן הוגש בכל מחזור,
+    ושלב 6ב יוכל ללמוד איזו התחייבות אתה כל הזמן דוחה.
+
+    התאריך הבא אינו שדה, בכוונה. הוא מחושב מ-``start_date`` ומ-``cycle``,
+    ולכן אין נדידה: ‏31.1 בתוספת חודש הוא 28.2, אבל בתוספת שני חודשים הוא
+    ‏31.3 ולא 28.3. שדה מתגלגל היה מאבד את ה-31 לנצח, אחרי פברואר אחד.
+    """
+
+    __tablename__ = "recurrences"
+    __table_args__ = (
+        CheckConstraint("interval_unit IN ('week', 'month', 'year')", name="recurrence_unit"),
+        CheckConstraint("interval_count BETWEEN 1 AND 60", name="recurrence_count"),
+        CheckConstraint("lead_days BETWEEN 0 AND 365", name="recurrence_lead"),
+        CheckConstraint("priority IN ('low', 'normal', 'high')", name="recurrence_priority"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    interval_unit: Mapped[str] = mapped_column(String(10), nullable=False)
+    interval_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # המחזור הראשון, והעוגן לכל החישובים הבאים
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # כמה מחזורים כבר הפכו למשימה
+    cycle: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # כמה ימים לפני התאריך להזכיר. בחידוש ביטוח זה כל העניין: ביום החידוש
+    # עצמו אין יותר מה לעשות
+    lead_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # הסיווג עובר כמו שהוא לכל משימה שתיווצר
+    domain_id: Mapped[int | None] = mapped_column(ForeignKey("domains.id", ondelete="RESTRICT"))
+    task_type_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_types.id", ondelete="RESTRICT")
+    )
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="RESTRICT"))
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    priority: Mapped[str] = mapped_column(String(10), default="normal", nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # כיבוי במקום מחיקה: ההתחייבות נגמרה, אבל המשימות שהיא יצרה נשארות
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    from_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
