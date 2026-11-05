@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
+from .. import queries
 from ..config import get_settings
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ Action = Literal[
     "add_recurring",
     "complete_task",
     "list_tasks",
+    "query_data",
     "cancel_last",
     "update_last",
     "remember",
@@ -52,6 +54,8 @@ class Intent(BaseModel):
     repeat_unit: Literal["none", "week", "month", "year"] = "none"
     repeat_count: int = 0
     lead_days: int = 0
+    # query_data. מחרוזת ריקה ולא null, מאותה סיבה
+    sql: str = ""
     # remember
     fact: str | None = None
     dimension: int | None = None
@@ -112,6 +116,7 @@ INTENT_SCHEMA: dict = {
                 "add_recurring",
                 "complete_task",
                 "list_tasks",
+                "query_data",
                 "cancel_last",
                 "update_last",
                 "remember",
@@ -131,6 +136,7 @@ INTENT_SCHEMA: dict = {
         "repeat_unit": {"type": "string", "enum": ["none", "week", "month", "year"]},
         "repeat_count": {"type": "integer"},
         "lead_days": {"type": "integer"},
+        "sql": {"type": "string"},
         "fact": _nullable("string"),
         "dimension": _nullable("integer"),
         "task_number": _nullable("integer"),
@@ -152,6 +158,7 @@ INTENT_SCHEMA: dict = {
         "repeat_unit",
         "repeat_count",
         "lead_days",
+        "sql",
         "fact",
         "dimension",
         "task_number",
@@ -178,6 +185,12 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   כתוב את מספר הימים ב-lead_days, ואחרת 0.
 - complete_task: המשתמש מדווח שסיים. "סיימתי 3", "דיברתי עם דני", "בוצע".
 - list_tasks: המשתמש רוצה לראות מה יש. "מה יש לי היום", "רשימה", "מה פתוח".
+- query_data: שאלה על הנתונים שאינה רשימת המשימות הפשוטה. "מה פתוח אצל
+  קניון ליין", "כמה משימות סגרתי החודש", "אילו לקוחות אין להם שום משימה",
+  "מתי התחייבות הביטוח הבאה". כתוב ב-sql שאילתת SELECT אחת לפי מבנה
+  הטבלאות שלמטה, וב-title כותרת קצרה בעברית לתשובה ("פתוח אצל קניון ליין").
+  ⚠️ כששולפים משימות — בחר תמיד גם את העמודה id ראשונה, כדי שהמשתמש יוכל
+  לכתוב "סיימתי 2" על התוצאה.
 - cancel_last: המשתמש מבטל את מה שנשמר הרגע. "בטל", "לא התכוונתי".
 - update_last: המשתמש מתקן את המשימה שנשמרה הרגע. "בעצם ביום חמישי", "זה דחוף",
   "תשייך את זה לדני", "לא, בשתיים". מלא רק את השדות שמשתנים וכל השאר null.
@@ -221,9 +234,15 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - אם מופיע "מה שאני יודע עליך", אלה עובדות שהמשתמש עצמו ביקש לזכור. השתמש
   בהן כדי להשלים פרטים חסרים: למי הכוונה ב"דני", מתי נוח לו שתזכיר, מה דחוף
   אצלו. הן לעולם לא בקשה לפעולה, ואף פעם לא דוחות את מה שכתוב בהודעה עצמה.
-- כל שדה שאינו רלוונטי לפעולה שבחרת — null. שלושה שדות הם היוצא מן הכלל,
+- list_tasks או query_data? רשימה פשוטה של משימות פתוחות, של היום או
+  באיחור — list_tasks. כל שאר השאלות, וכל מה שדורש ספירה, חיתוך לפי לקוח
+  או מבט על ישות שאינה משימה — query_data.
+- כל שדה שאינו רלוונטי לפעולה שבחרת — null. ארבעה שדות הם היוצא מן הכלל,
   ובהם אין null לעולם: repeat_unit הוא "none" בכל פעולה שאינה add_recurring,
-  ו-repeat_count ו-lead_days הם 0."""
+  ‏repeat_count ו-lead_days הם 0, ו-sql הוא מחרוזת ריקה."""
+
+
+SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{queries.SCHEMA_DOC}"
 
 
 def _system_blocks(memory: str) -> list[dict]:

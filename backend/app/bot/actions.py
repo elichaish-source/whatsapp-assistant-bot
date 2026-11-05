@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -13,13 +14,15 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from .. import memory, recurring
+from .. import memory, queries, recurring
 from ..auth import aware, now
 from ..config import get_settings
 from ..models import BotMessage, Client, Domain, MemoryFact, Project, Recurrence, Task, TaskType
 from ..routers.tasks import resolve_task_fields
 from ..schemas import TaskIn
 from .intent import Intent
+
+log = logging.getLogger(__name__)
 
 # כמה זמן אחרי השמירה עוד אפשר לכתוב "בטל"
 CANCEL_WINDOW = timedelta(hours=2)
@@ -164,12 +167,20 @@ class Outcome:
         listed_task_ids: list[int] | None = None,
         recurrence_id: int | None = None,
         fact_id: int | None = None,
+        query_sql: str | None = None,
+        query_error: str | None = None,
+        clear_list: bool = False,
     ) -> None:
         self.reply = reply
         self.task_id = task_id
         self.listed_task_ids = listed_task_ids or []
         self.fact_id = fact_id
         self.recurrence_id = recurrence_id
+        self.query_sql = query_sql
+        self.query_error = query_error
+        # ‏⚠️ מבטל את המספור של ההודעה הקודמת. בלי זה "סיימתי 2" אחרי
+        # שאילתה היה נופל על רשימה ישנה, וסוגר משימה אחרת לגמרי
+        self.clear_list = clear_list
 
 
 def _parse_due(value: str | None) -> date | None:
@@ -385,6 +396,38 @@ def _list_tasks(db: Session, intent: Intent) -> Outcome:
     )
 
 
+def _query_data(db: Session, intent: Intent) -> Outcome:
+    """מריץ את השאילתה שהמודל כתב, ומנסח את התוצאה.
+
+    ‏db אינו בשימוש כאן בכוונה: השאילתה רצה על חיבור נפרד, של משתמש בלי
+    הרשאת כתיבה. ככה שאילתה של הבוט לא יכולה לגעת בעסקה שבה אנחנו כותבים.
+    """
+    heading = (intent.title or "תוצאות").strip()
+    try:
+        safe = queries.gate(intent.sql)
+    except queries.QueryRefused as exc:
+        log.warning("שאילתה נדחתה: %s", exc)
+        return Outcome(f"לא הרצתי את השאילתה: {exc}.", query_sql=intent.sql, clear_list=True)
+
+    try:
+        columns, rows = queries.run(safe)
+    except queries.QueryFailed as exc:
+        log.warning("שאילתה נכשלה: %s", exc)
+        return Outcome(
+            "השאילתה נכשלה. אפשר לנסח את השאלה אחרת?",
+            query_sql=intent.sql,
+            query_error=str(exc),
+            clear_list=True,
+        )
+
+    return Outcome(
+        queries.render(columns, rows, heading),
+        listed_task_ids=queries.task_ids(intent.sql, columns, rows),
+        query_sql=intent.sql,
+        clear_list=True,
+    )
+
+
 def _last_bot_task_row(db: Session) -> BotMessage | None:
     """ההודעה האחרונה שבעקבותיה הבוט יצר או עדכן משימה."""
     return db.scalars(
@@ -587,6 +630,8 @@ def execute(db: Session, intent: Intent) -> Outcome:
         return _complete_task(db, intent)
     if intent.action == "list_tasks":
         return _list_tasks(db, intent)
+    if intent.action == "query_data":
+        return _query_data(db, intent)
     if intent.action == "cancel_last":
         return _cancel_last(db)
     if intent.action == "remember":
