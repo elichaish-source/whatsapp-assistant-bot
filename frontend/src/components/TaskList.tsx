@@ -62,6 +62,17 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
     changed();
   };
 
+  /** תיוג מהיר מתוך השורה, בלי לפתוח את המשימה */
+  const setPriority = async (task: Task, priority: Priority) => {
+    if (task.priority === priority) return;
+    try {
+      await api(`/tasks/${task.id}/priority`, { method: "PATCH", body: { priority } });
+      changed();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   const setFilter = (key: keyof Filters, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
   const select = (key: keyof Filters, label: string, items: { id: number; name: string }[]) => (
@@ -91,14 +102,30 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
         {fixed.client_id === undefined && select("client_id", "לקוח", clients)}
         {fixed.project_id === undefined && select("project_id", "פרויקט", projects)}
         {select("task_type_id", "סוג", taskTypes)}
-        <select value={filters.priority} onChange={(e) => setFilter("priority", e.target.value)} aria-label="עדיפות">
-          <option value="">עדיפות: הכול</option>
-          {(Object.keys(PRIORITY_LABELS) as Priority[]).map((p) => (
-            <option key={p} value={p}>
-              {PRIORITY_LABELS[p]}
-            </option>
-          ))}
-        </select>
+      </div>
+
+      {/* סינון מהיר לפי מתי לטפל */}
+      <div className="when-tabs" role="tablist" aria-label="מתי">
+        <button
+          role="tab"
+          aria-selected={filters.priority === ""}
+          className={filters.priority === "" ? "on" : ""}
+          onClick={() => setFilter("priority", "")}
+        >
+          הכול
+        </button>
+        {(Object.keys(PRIORITY_LABELS) as Priority[]).map((p) => (
+          <button
+            key={p}
+            role="tab"
+            data-when={p}
+            aria-selected={filters.priority === p}
+            className={filters.priority === p ? "on" : ""}
+            onClick={() => setFilter("priority", p)}
+          >
+            {PRIORITY_LABELS[p]}
+          </button>
+        ))}
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -110,10 +137,7 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
             <li key={t.id} className={`card task ${t.status}`}>
               <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} aria-label="בוצעה" />
               <div className="task-body" onClick={() => setEditing(t)}>
-                <div className="task-title">
-                  {t.priority === "high" && <span className="pill high">!</span>}
-                  {t.title}
-                </div>
+                <div className="task-title">{t.title}</div>
                 <div className="task-meta">
                   <span className="pill">{nameOf(domains, t.domain_id) || "ללא תחום"}</span>
                   {t.task_type_id && <span>{nameOf(taskTypes, t.task_type_id)}</span>}
@@ -126,6 +150,20 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
                   )}
                   {t.reminder_at && <span>⏰ {formatDateTime(t.reminder_at)}</span>}
                 </div>
+              </div>
+              {/* מחוץ ל-task-body, כדי שלחיצה כאן לא תפתח את המשימה */}
+              <div className="task-when" role="group" aria-label="מתי לטפל">
+                {(Object.keys(PRIORITY_LABELS) as Priority[]).map((p) => (
+                  <button
+                    key={p}
+                    data-when={p}
+                    className={t.priority === p ? "on" : ""}
+                    aria-pressed={t.priority === p}
+                    onClick={() => setPriority(t, p)}
+                  >
+                    {PRIORITY_LABELS[p]}
+                  </button>
+                ))}
               </div>
             </li>
           ))}

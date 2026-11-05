@@ -426,7 +426,7 @@ def test_update_last_moves_the_task_to_a_real_client(db):
 
 
 def test_update_last_with_nothing_saved(db):
-    outcome = actions.execute(db, Intent(action="update_last", priority="high"))
+    outcome = actions.execute(db, Intent(action="update_last", priority="today"))
     assert "אין משימה אחרונה" in outcome.reply
 
 
@@ -435,9 +435,9 @@ def test_update_last_does_not_touch_dashboard_tasks(db):
     db.add(BotMessage(wa_message_id="dash-1", intent="add_task", task_id=task.id))
     db.commit()
 
-    outcome = actions.execute(db, Intent(action="update_last", priority="high"))
+    outcome = actions.execute(db, Intent(action="update_last", priority="today"))
     db.refresh(task)
-    assert task.priority == "normal"
+    assert task.priority == "week"
     assert "לא נוצרה מהבוט" in outcome.reply
 
 
@@ -594,7 +594,7 @@ def test_a_task_from_the_bot_is_written_to_the_journal(db):
 
 def test_the_journal_tells_a_postponed_date_from_any_other_change(client, db):
     created = client.post("/api/tasks", json={"title": "להתקשר לדני"}).json()
-    body = {"title": "להתקשר לדני", "due_date": "2026-12-01", "priority": "normal", "status": "open"}
+    body = {"title": "להתקשר לדני", "due_date": "2026-12-01", "priority": "week", "status": "open"}
     client.put(f"/api/tasks/{created['id']}", json=body)
     client.put(f"/api/tasks/{created['id']}", json={**body, "due_date": "2026-12-10"})
     client.put(f"/api/tasks/{created['id']}", json={**body, "due_date": "2026-11-20"})

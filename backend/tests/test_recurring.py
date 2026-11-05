@@ -28,7 +28,7 @@ def recurrence(db, **kwargs) -> Recurrence:
         "start_date": date(2026, 1, 15),
         "cycle": 0,
         "lead_days": 0,
-        "priority": "normal",
+        "priority": "week",
         "active": True,
         "from_bot": False,
     }
@@ -88,13 +88,13 @@ def test_a_start_date_in_the_past_skips_to_the_next_cycle(db):
 
 
 def test_the_cycle_becomes_a_real_task(db):
-    rec = recurrence(db, start_date=date(2026, 11, 4), priority="high", notes="דרך האתר")
+    rec = recurrence(db, start_date=date(2026, 11, 4), priority="today", notes="דרך האתר")
     assert recurring.materialize(db, moment("2026-11-04")) == 1
 
     task = tasks(db)[0]
     assert task.title == "דוח מע״מ"
     assert task.due_date == date(2026, 11, 4)
-    assert task.priority == "high"
+    assert task.priority == "today"
     assert task.notes == "דרך האתר"
     assert task.recurrence_id == rec.id
     assert task.status == "open"

@@ -108,7 +108,7 @@ class Task(TimestampMixin, Base):
     __tablename__ = "tasks"
     __table_args__ = (
         CheckConstraint("status IN ('open', 'done')", name="task_status"),
-        CheckConstraint("priority IN ('low', 'normal', 'high')", name="task_priority"),
+        CheckConstraint("priority IN ('today', 'week', 'later')", name="task_priority"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -125,7 +125,7 @@ class Task(TimestampMixin, Base):
     reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # מתי התזכורת נשלחה בוואטסאפ. מונע שליחה כפולה
     reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    priority: Mapped[str] = mapped_column(String(10), default="normal", nullable=False)
+    priority: Mapped[str] = mapped_column(String(10), default="week", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
     # נוצרה מהבוט בוואטסאפ ולא מהדשבורד
     from_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -276,7 +276,7 @@ class Recurrence(TimestampMixin, Base):
         CheckConstraint("interval_unit IN ('week', 'month', 'year')", name="recurrence_unit"),
         CheckConstraint("interval_count BETWEEN 1 AND 60", name="recurrence_count"),
         CheckConstraint("lead_days BETWEEN 0 AND 365", name="recurrence_lead"),
-        CheckConstraint("priority IN ('low', 'normal', 'high')", name="recurrence_priority"),
+        CheckConstraint("priority IN ('today', 'week', 'later')", name="recurrence_priority"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -297,7 +297,7 @@ class Recurrence(TimestampMixin, Base):
     )
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="RESTRICT"))
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
-    priority: Mapped[str] = mapped_column(String(10), default="normal", nullable=False)
+    priority: Mapped[str] = mapped_column(String(10), default="week", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
     # כיבוי במקום מחיקה: ההתחייבות נגמרה, אבל המשימות שהיא יצרה נשארות
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

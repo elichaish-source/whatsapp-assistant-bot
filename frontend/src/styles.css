@@ -289,11 +289,55 @@ button:disabled {
   font-size: 0.82rem;
 }
 
-.pill.high {
+/* --- מתי לטפל: לשוניות סינון וכפתורי תיוג בשורה --- */
+
+.when-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.when-tabs button {
+  padding: 6px 16px;
+}
+
+.task-when {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.task-when button {
+  padding: 3px 10px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+/* המצב הנבחר, גם בלשונית וגם בשורה */
+.when-tabs button.on,
+.task-when button.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+
+/* "היום" בולט משאר השניים, כדי שיימצא במבט אחד */
+.when-tabs button.on[data-when="today"],
+.task-when button.on[data-when="today"] {
   background: var(--high);
+  border-color: var(--high);
   color: #fff;
-  font-weight: 700;
-  margin-inline-end: 6px;
+}
+
+/* במסך צר הכפתורים יורדים לשורה משלהם במקום להצטופף */
+@media (max-width: 600px) {
+  .task {
+    flex-wrap: wrap;
+  }
+
+  .task-when {
+    margin-inline-start: 32px;
+  }
 }
 
 .overdue {

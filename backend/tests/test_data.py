@@ -122,6 +122,31 @@ def test_task_status_and_counts(client):
     assert client.get("/api/tasks", params={"status": "open"}).json() == []
 
 
+def test_task_priority_is_a_timeframe(client):
+    t = client.post("/api/tasks", json={"title": "בלי עדיפות"}).json()
+    # ברירת המחדל היא "השבוע", לא "היום"
+    assert t["priority"] == "week"
+
+    tagged = client.patch(f"/api/tasks/{t['id']}/priority", json={"priority": "today"}).json()
+    assert tagged["priority"] == "today"
+    # תיוג מהיר לא נוגע בשאר השדות
+    assert tagged["title"] == "בלי עדיפות" and tagged["status"] == "open"
+
+    assert client.get("/api/tasks", params={"priority": "today"}).json()[0]["id"] == t["id"]
+    assert client.get("/api/tasks", params={"priority": "later"}).json() == []
+
+    # הערכים הישנים כבר לא קיימים
+    assert client.patch(f"/api/tasks/{t['id']}/priority", json={"priority": "high"}).status_code == 422
+
+
+def test_tasks_are_sorted_today_first(client):
+    later = client.post("/api/tasks", json={"title": "בהמשך", "priority": "later"}).json()
+    today = client.post("/api/tasks", json={"title": "היום", "priority": "today"}).json()
+    week = client.post("/api/tasks", json={"title": "השבוע", "priority": "week"}).json()
+    order = [t["id"] for t in client.get("/api/tasks").json()]
+    assert order == [today["id"], week["id"], later["id"]]
+
+
 def test_lookup_crud(client):
     r = client.post("/api/task-types", json={"name": "מייל", "sort_order": 4})
     assert r.status_code == 201

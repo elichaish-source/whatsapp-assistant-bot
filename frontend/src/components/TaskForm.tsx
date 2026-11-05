@@ -35,7 +35,7 @@ export default function TaskForm({
     project_id: task?.project_id ?? defaults?.project_id ?? null,
     due_date: task?.due_date ?? "",
     reminder_at: toLocalInput(task?.reminder_at ?? null),
-    priority: (task?.priority ?? "normal") as Priority,
+    priority: (task?.priority ?? "week") as Priority,
     notes: task?.notes ?? "",
   });
   const [error, setError] = useState("");

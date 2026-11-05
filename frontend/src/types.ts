@@ -32,7 +32,7 @@ export interface Project {
   open_tasks: number;
 }
 
-export type Priority = "low" | "normal" | "high";
+export type Priority = "today" | "week" | "later";
 
 export interface Task {
   id: number;
@@ -50,9 +50,9 @@ export interface Task {
 }
 
 export const PRIORITY_LABELS: Record<Priority, string> = {
-  high: "גבוהה",
-  normal: "רגילה",
-  low: "נמוכה",
+  today: "היום",
+  week: "השבוע",
+  later: "בהמשך",
 };
 
 export interface MemoryFact {

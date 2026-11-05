@@ -76,7 +76,7 @@ export default function Recurring() {
                 )}
                 {rec.lead_days > 0 && <span>התראה {rec.lead_days} ימים לפני</span>}
                 {subject(rec)}
-                {rec.priority === "high" && <span>דחוף</span>}
+                {rec.priority === "today" && <span>היום</span>}
                 {rec.from_bot && <span className="pill">מוואטסאפ</span>}
               </div>
               {rec.notes && <div className="muted">{rec.notes}</div>}
