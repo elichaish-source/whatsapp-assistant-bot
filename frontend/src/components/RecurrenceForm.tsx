@@ -25,7 +25,7 @@ export default function RecurrenceForm({
     task_type_id: recurrence?.task_type_id ?? null,
     client_id: recurrence?.client_id ?? null,
     project_id: recurrence?.project_id ?? null,
-    priority: (recurrence?.priority ?? "normal") as Priority,
+    priority: (recurrence?.priority ?? "week") as Priority,
     notes: recurrence?.notes ?? "",
     active: recurrence?.active ?? true,
   });

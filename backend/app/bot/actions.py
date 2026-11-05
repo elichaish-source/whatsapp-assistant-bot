@@ -138,8 +138,8 @@ def describe(db: Session, task: Task) -> str:
         parts.append(f"עד {task.due_date:%d/%m}")
     if task.reminder_at:
         parts.append(f"תזכורת {to_local(task.reminder_at):%d/%m %H:%M}")
-    if task.priority == "high":
-        parts.append("דחוף")
+    if task.priority == "today":
+        parts.append("היום")
     return " · ".join(parts)
 
 
@@ -205,7 +205,7 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
         project_id=intent.project_id,
         due_date=_parse_due(intent.due_date),
         reminder_at=_parse_reminder(intent.reminder_at),
-        priority=intent.priority or "normal",
+        priority=intent.priority or "week",
         notes=intent.notes,
     )
     try:
@@ -253,7 +253,7 @@ def _add_recurring(db: Session, intent: Intent) -> Outcome:
         task_type_id=intent.task_type_id,
         client_id=intent.client_id,
         project_id=intent.project_id,
-        priority=intent.priority or "normal",
+        priority=intent.priority or "week",
         notes=intent.notes,
     )
     try:

@@ -6,7 +6,7 @@ from .. import memory
 from ..auth import now, require_user
 from ..db import get_db
 from ..models import Client, Domain, Project, Task, TaskType
-from ..schemas import Priority, TaskIn, TaskOut, TaskStatus, TaskStatusIn
+from ..schemas import Priority, TaskIn, TaskOut, TaskPriorityIn, TaskStatus, TaskStatusIn
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(require_user)])
 
@@ -77,7 +77,7 @@ def list_tasks(
     q: str | None = None,
     db: Session = Depends(get_db),
 ):
-    priority_rank = case({"high": 0, "normal": 1, "low": 2}, value=Task.priority)
+    priority_rank = case({"today": 0, "week": 1, "later": 2}, value=Task.priority)
     stmt = select(Task).order_by(
         Task.status.desc(),  # open לפני done
         Task.due_date.is_(None),
@@ -177,6 +177,18 @@ def set_task_status(task_id: int, body: TaskStatusIn, db: Session = Depends(get_
     task = _get(db, task_id)
     before = _snapshot(task)
     _set_status(task, body.status)
+    db.commit()
+    db.refresh(task)
+    _log_changes(task, before, _snapshot(task))
+    return task
+
+
+@router.patch("/{task_id}/priority", response_model=TaskOut)
+def set_task_priority(task_id: int, body: TaskPriorityIn, db: Session = Depends(get_db)):
+    """תיוג מהיר מתוך רשימת המשימות, בלי לפתוח את המשימה."""
+    task = _get(db, task_id)
+    before = _snapshot(task)
+    task.priority = body.priority
     db.commit()
     db.refresh(task)
     _log_changes(task, before, _snapshot(task))

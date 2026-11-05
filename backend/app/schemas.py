@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ProjectStatus = Literal["active", "done"]
 TaskStatus = Literal["open", "done"]
-Priority = Literal["low", "normal", "high"]
+Priority = Literal["today", "week", "later"]
 
 
 def _blank_to_none(value):
@@ -118,7 +118,7 @@ class TaskIn(BaseModel):
     project_id: int | None = None
     due_date: date | None = None
     reminder_at: datetime | None = None
-    priority: Priority = "normal"
+    priority: Priority = "week"
     notes: str | None = None
 
     _clean = field_validator("notes", mode="before")(_blank_to_none)
@@ -143,6 +143,10 @@ class TaskOut(ORMModel):
 
 class TaskStatusIn(BaseModel):
     status: TaskStatus
+
+
+class TaskPriorityIn(BaseModel):
+    priority: Priority
 
 
 # --- כניסה ---
@@ -214,7 +218,7 @@ class RecurrenceIn(BaseModel):
     task_type_id: int | None = None
     client_id: int | None = None
     project_id: int | None = None
-    priority: Priority = "normal"
+    priority: Priority = "week"
     notes: str | None = None
     active: bool = True
 
