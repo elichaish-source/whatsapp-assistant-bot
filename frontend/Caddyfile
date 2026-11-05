@@ -25,6 +25,18 @@
 		@manifest path /manifest.webmanifest
 		header @manifest Content-Type "application/manifest+json"
 
+		# ‏Vite נותן לכל קובץ ב-assets שם שכולל חתימה של תוכנו, ולכן גרסה
+		# חדשה היא תמיד שם חדש והקובץ הקיים אף פעם לא משתנה
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+
+		# כל השאר, ובראשו index.html, מצביע על גרסת הקוד הנוכחית. בלי זה
+		# הדפדפן נשען על ניחוש משלו, ממשיך להגיש index.html ישן אחרי פריסה,
+		# ומכאן טוען את ה-assets של הגרסה הקודמת. no-cache לא אוסר על מטמון,
+		# אלא מחייב לוודא מול השרת שהעותק עדיין עדכני
+		@app not path /assets/*
+		header @app Cache-Control "no-cache"
+
 		try_files {path} /index.html
 		file_server
 	}
