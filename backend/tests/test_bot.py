@@ -12,9 +12,10 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from app.bot import actions, reminders
+from app.bot import actions, intent as intent_module, reminders
 from app.bot.intent import (
     INTENT_SCHEMA,
+    SYSTEM_PROMPT,
     Intent,
     IntentError,
     _system_blocks,
@@ -141,8 +142,33 @@ def test_no_enum_sits_next_to_a_list_of_types():
                 assert None not in option["enum"], name
 
 
+def test_the_schema_stays_under_the_union_limit():
+    """‏ה-API מגביל ל-16 שדות עם טיפוס איחוד, ומחזיר 400 על **כל** הודעה מעבר לזה.
+
+    ב-5.11.2026 שלושה שדות חדשים העלו את המספר ל-18, והבוט ענה "לא הצלחתי
+    לפענח" על כל דבר. הבדיקות לא תפסו את זה כי הן לא קוראות ל-API, ולכן
+    הגבול נשמר כאן — בספירה, בלי קריאה.
+    """
+    unions = [
+        name
+        for name, prop in INTENT_SCHEMA["properties"].items()
+        if "anyOf" in prop or isinstance(prop.get("type"), list)
+    ]
+    assert len(unions) <= intent_module.MAX_UNION_FIELDS, unions
+
+
+def test_the_recurring_fields_have_an_empty_value_instead_of_null():
+    """הם היוצאים מן הכלל שקונים את המקום מתחת לגבול, וצריכים להישאר כאלה."""
+    for name in ("repeat_unit", "repeat_count", "lead_days"):
+        prop = INTENT_SCHEMA["properties"][name]
+        assert "anyOf" not in prop, name
+        assert prop["type"] in ("string", "integer"), name
+    assert Intent(action="add_task", title="x").repeat_unit == "none"
+    assert "none" in SYSTEM_PROMPT
+
+
 def test_nullable_enums_are_written_as_anyof():
-    for name in ("priority", "list_filter", "repeat_unit"):
+    for name in ("priority", "list_filter"):
         options = INTENT_SCHEMA["properties"][name]["anyOf"]
         assert {"type": "null"} in options, name
         assert any("enum" in option for option in options), name

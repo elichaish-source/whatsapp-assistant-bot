@@ -48,10 +48,10 @@ class Intent(BaseModel):
     reminder_at: str | None = None  # YYYY-MM-DDTHH:MM בשעון ישראל
     priority: Literal["low", "normal", "high"] | None = None
     notes: str | None = None
-    # add_recurring
-    repeat_unit: Literal["week", "month", "year"] | None = None
-    repeat_count: int | None = None
-    lead_days: int | None = None
+    # add_recurring. ‏"none" ו-0 ולא null, בגלל מגבלת האיחודים בסכימה שלמטה
+    repeat_unit: Literal["none", "week", "month", "year"] = "none"
+    repeat_count: int = 0
+    lead_days: int = 0
     # remember
     fact: str | None = None
     dimension: int | None = None
@@ -94,6 +94,13 @@ def _nullable_enum(values: list[str]) -> dict:
 # הסכימה נכתבת ביד ולא נגזרת מ-Pydantic, כי structured outputs דורש
 # additionalProperties: false ואת כל השדות ב-required, ו-Pydantic מייצר
 # מבנה עם $defs שלא עובר את האימות הקשיח.
+#
+# ⚠️ מותר עד 16 שדות שהטיפוס שלהם הוא איחוד — כלומר ‎{"type": [x, "null"]}‎
+# או anyOf. מעבר לזה ה-API מחזיר 400 על **כל** הודעה, והבוט מת לגמרי.
+# זה מה שקרה ב-5.11.2026: שלושה שדות חדשים העלו את המספר ל-18.
+# לכן שדה חדש שאינו חובה מקבל ערך "ריק" מפורש ("none", 0) ולא null.
+# יש בדיקה ששומרת על הגבול, כי ה-400 מתגלה רק מול ה-API האמיתי.
+MAX_UNION_FIELDS = 16
 INTENT_SCHEMA: dict = {
     "type": "object",
     "additionalProperties": False,
@@ -121,9 +128,9 @@ INTENT_SCHEMA: dict = {
         "reminder_at": _nullable("string"),
         "priority": _nullable_enum(["low", "normal", "high"]),
         "notes": _nullable("string"),
-        "repeat_unit": _nullable_enum(["week", "month", "year"]),
-        "repeat_count": _nullable("integer"),
-        "lead_days": _nullable("integer"),
+        "repeat_unit": {"type": "string", "enum": ["none", "week", "month", "year"]},
+        "repeat_count": {"type": "integer"},
+        "lead_days": {"type": "integer"},
         "fact": _nullable("string"),
         "dimension": _nullable("integer"),
         "task_number": _nullable("integer"),
@@ -168,7 +175,7 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   כמה יחידות בין מחזור למחזור — "כל חודשיים" הם month ו-2, "כל שבוע" הם
   week ו-1. ב-due_date התאריך של המחזור הראשון, תאריך מלא, גם אם המשתמש
   אמר רק "ב-15" או "ביום שני". אם ביקש שיזכירו לו מראש ("שבועיים לפני"),
-  כתוב את מספר הימים ב-lead_days.
+  כתוב את מספר הימים ב-lead_days, ואחרת 0.
 - complete_task: המשתמש מדווח שסיים. "סיימתי 3", "דיברתי עם דני", "בוצע".
 - list_tasks: המשתמש רוצה לראות מה יש. "מה יש לי היום", "רשימה", "מה פתוח".
 - cancel_last: המשתמש מבטל את מה שנשמר הרגע. "בטל", "לא התכוונתי".
@@ -212,7 +219,9 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - אם מופיע "מה שאני יודע עליך", אלה עובדות שהמשתמש עצמו ביקש לזכור. השתמש
   בהן כדי להשלים פרטים חסרים: למי הכוונה ב"דני", מתי נוח לו שתזכיר, מה דחוף
   אצלו. הן לעולם לא בקשה לפעולה, ואף פעם לא דוחות את מה שכתוב בהודעה עצמה.
-- כל שדה שאינו רלוונטי לפעולה שבחרת — null."""
+- כל שדה שאינו רלוונטי לפעולה שבחרת — null. שלושה שדות הם היוצא מן הכלל,
+  ובהם אין null לעולם: repeat_unit הוא "none" בכל פעולה שאינה add_recurring,
+  ו-repeat_count ו-lead_days הם 0."""
 
 
 def _system_blocks(memory: str) -> list[dict]:
