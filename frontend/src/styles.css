@@ -7,7 +7,11 @@
   --primary: #0f766e;
   --primary-text: #ffffff;
   --danger: #b42318;
-  --high: #c2410c;
+  /* ארבע מסגרות הזמן. סולם דחיפות: אדום, כתום, טורקיז, אפור */
+  --when-today: #b42318;
+  --when-tomorrow: #c2410c;
+  --when-week: #0f766e;
+  --when-later: #64748b;
   --pill: #eef2f6;
   --selected: #ccfbf1;
 }
@@ -22,7 +26,10 @@
     --primary: #2dd4bf;
     --primary-text: #0b1f1d;
     --danger: #f87171;
-    --high: #fb923c;
+  --when-today: #f87171;
+  --when-tomorrow: #fb923c;
+  --when-week: #2dd4bf;
+  --when-later: #94a3b8;
     --pill: #262c37;
     --selected: #134e4a;
   }
@@ -313,7 +320,7 @@ button:disabled {
   color: var(--muted);
 }
 
-/* המצב הנבחר, גם בלשונית וגם בשורה */
+/* לשונית "הכול" היא היחידה בלי data-when, ולכן היא נשארת בצבע הראשי */
 .when-tabs button.on,
 .task-when button.on {
   background: var(--primary);
@@ -321,12 +328,51 @@ button:disabled {
   color: var(--primary-text);
 }
 
-/* "היום" בולט משאר השניים, כדי שיימצא במבט אחד */
+/* ארבע מסגרות הזמן, ארבעה צבעים: סולם דחיפות מאדום לאפור. קודם "השבוע"
+   ו"בהמשך" קיבלו שתיהן את הצבע הראשי, ולא היה אפשר להבדיל ביניהן במבט */
 .when-tabs button.on[data-when="today"],
 .task-when button.on[data-when="today"] {
-  background: var(--high);
-  border-color: var(--high);
-  color: #fff;
+  background: var(--when-today);
+  border-color: var(--when-today);
+  color: var(--primary-text);
+}
+
+.when-tabs button.on[data-when="tomorrow"],
+.task-when button.on[data-when="tomorrow"] {
+  background: var(--when-tomorrow);
+  border-color: var(--when-tomorrow);
+  color: var(--primary-text);
+}
+
+.when-tabs button.on[data-when="week"],
+.task-when button.on[data-when="week"] {
+  background: var(--when-week);
+  border-color: var(--when-week);
+  color: var(--primary-text);
+}
+
+.when-tabs button.on[data-when="later"],
+.task-when button.on[data-when="later"] {
+  background: var(--when-later);
+  border-color: var(--when-later);
+  color: var(--primary-text);
+}
+
+/* מקור המשימה: אייקון קטן לפני הכותרת, ללא טקסט */
+.task-source {
+  margin-inline-end: 6px;
+  font-size: 0.9rem;
+  opacity: 0.75;
+}
+
+/* לקורא מסך בלבד: האייקון לבדו לא אומר כלום למי שלא רואה אותו */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* במסך צר הכפתורים יורדים לשורה משלהם. בלי flex-basis מפורש הכותרת
@@ -343,6 +389,7 @@ button:disabled {
 
   .task-when {
     margin-inline-start: 32px;
+    flex-wrap: wrap;
   }
 }
 

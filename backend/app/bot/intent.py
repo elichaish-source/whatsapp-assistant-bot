@@ -46,7 +46,7 @@ class Intent(BaseModel):
     project_id: int | None = None
     due_date: str | None = None  # YYYY-MM-DD
     reminder_at: str | None = None  # YYYY-MM-DDTHH:MM בשעון ישראל
-    priority: Literal["today", "week", "later"] | None = None
+    priority: Literal["today", "tomorrow", "week", "later"] | None = None
     notes: str | None = None
     # add_recurring. ‏"none" ו-0 ולא null, בגלל מגבלת האיחודים בסכימה שלמטה
     repeat_unit: Literal["none", "week", "month", "year"] = "none"
@@ -126,7 +126,7 @@ INTENT_SCHEMA: dict = {
         "project_id": _nullable("integer"),
         "due_date": _nullable("string"),
         "reminder_at": _nullable("string"),
-        "priority": _nullable_enum(["today", "week", "later"]),
+        "priority": _nullable_enum(["today", "tomorrow", "week", "later"]),
         "notes": _nullable("string"),
         "repeat_unit": {"type": "string", "enum": ["none", "week", "month", "year"]},
         "repeat_count": {"type": "integer"},
@@ -208,8 +208,11 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   בשעון המקומי, רק אם המשתמש ביקש שיזכירו לו בזמן מסוים. "מחר בבוקר" = 09:00,
   "בצהריים" = 13:00, "בערב" = 19:00. בלי שעה מפורשת ובלי בקשת תזכורת — null.
 - priority אומר מתי לטפל, לא כמה חשוב: today כשהמשתמש אמר שזה להיום או
-  דחוף ("תקפיץ להיום", "דחוף", "עכשיו"), later כשאמר שזה לא בוער ("מתישהו",
-  "כשיהיה זמן", "בהמשך"). בלי רמז כזה — null, וברירת המחדל היא week.
+  דחוף ("תקפיץ להיום", "דחוף", "עכשיו"), tomorrow כשאמר מחר ("מחר",
+  "מחר בבוקר", "ליום שאחרי"), later כשאמר שזה לא בוער ("מתישהו", "כשיהיה
+  זמן", "בהמשך"). בלי רמז כזה — null, וברירת המחדל היא week.
+  שים לב: "מחר בבוקר" לבד הוא reminder_at ולא priority; תן tomorrow רק אם
+  "מחר" אומר מתי לטפל במשימה ולא מתי להזכיר עליה.
 - notes: רק פרטים שלא נכנסו ל-title ושווה לשמור, אחרת null.
 - אם מופיעה "השיחה עד עכשיו", היא שם רק כדי להבין הודעת המשך: "בעצם...",
   "במקום", "גם", או תשובה לשאלה ששאלת קודם (clarify) — ואז הרכב את הכוונה

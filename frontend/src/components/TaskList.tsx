@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, query } from "../api";
 import { nameOf, useLookups } from "../lookups";
-import { PRIORITY_LABELS, type Priority, type Task } from "../types";
+import { PRIORITY_LABELS, SOURCE_ICONS, SOURCE_LABELS, type Priority, type Task } from "../types";
 import Modal from "./Modal";
 import TaskForm, { type TaskDefaults } from "./TaskForm";
 
@@ -136,7 +136,14 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
             <li key={t.id} className={`card task ${t.status}`}>
               <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} aria-label="בוצעה" />
               <div className="task-body" onClick={() => setEditing(t)}>
-                <div className="task-title">{t.title}</div>
+                <div className="task-title">
+                  {/* אייקון בלבד, כדי לא להחזיר טקסט לשורה. השם המלא ב-title */}
+                  <span className="task-source" title={SOURCE_LABELS[t.source]}>
+                    {SOURCE_ICONS[t.source]}
+                  </span>
+                  <span className="sr-only">{SOURCE_LABELS[t.source]}</span>
+                  {t.title}
+                </div>
                 {/* רק הלקוח. התחום, הסוג, התאריך והתזכורת מופיעים בפתיחת המשימה,
                     כדי שהשורה תישאר בגובה שאפשר לסרוק ברשימה ארוכה */}
                 {t.client_id && fixed.client_id === undefined && (

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import memory, recurring, waha
+from .. import memory, recurring, timeframe, waha
 from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
@@ -112,6 +112,13 @@ async def reminder_loop() -> None:
 def _tick() -> None:
     db = SessionLocal()
     try:
+        try:
+            # "מחר" שנקבע ביום קודם הוא "היום" מעכשיו. לפני התזכורות, כדי
+            # שהמשימה תופיע בתיוג הנכון באותו סבב
+            timeframe.roll_tomorrow(db, now_local().date())
+        except Exception:  # noqa: BLE001 - תקלה בהתגלגלות לא עוצרת תזכורות
+            log.exception("התגלגלות מסגרת הזמן נכשלה")
+            db.rollback()
         try:
             recurring.materialize(db, now_local())
         except Exception:  # noqa: BLE001 - תקלה בחוזרות לא עוצרת תזכורות

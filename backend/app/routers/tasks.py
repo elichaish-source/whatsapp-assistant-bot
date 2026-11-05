@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
-from .. import memory
+from .. import memory, timeframe
 from ..auth import now, require_user
 from ..db import get_db
 from ..models import Client, Domain, Project, Task, TaskType
@@ -77,7 +77,7 @@ def list_tasks(
     q: str | None = None,
     db: Session = Depends(get_db),
 ):
-    priority_rank = case({"today": 0, "week": 1, "later": 2}, value=Task.priority)
+    priority_rank = case({"today": 0, "tomorrow": 1, "week": 2, "later": 3}, value=Task.priority)
     stmt = select(Task).order_by(
         Task.status.desc(),  # open לפני done
         Task.due_date.is_(None),
@@ -147,7 +147,9 @@ def _log_changes(task: Task, before: dict, after: dict) -> None:
 def create_task(body: TaskIn, db: Session = Depends(get_db)):
     data = resolve_task_fields(db, body)
     new_status = data.pop("status")
-    task = Task(**data, status="open")
+    # source = dashboard: "נוצרה ישירות מהמערכת". הבוט קובע whatsapp בעצמו
+    task = Task(**data, status="open", source="dashboard")
+    timeframe.set_priority(task, task.priority)
     _set_status(task, new_status)
     db.add(task)
     db.commit()
@@ -164,8 +166,13 @@ def update_task(task_id: int, body: TaskIn, db: Session = Depends(get_db)):
     data = resolve_task_fields(db, body)
     before = _snapshot(task)
     _set_status(task, data.pop("status"))
+    # מסגרת הזמן עוברת דרך timeframe, כדי שהחותמת תזוז יחד איתה — אבל רק
+    # אם היא באמת השתנתה, שלא כל שמירה של הטופס תאפס את שעון ההתגלגלות
+    new_priority = data.pop("priority")
     for key, value in data.items():
         setattr(task, key, value)
+    if new_priority != task.priority:
+        timeframe.set_priority(task, new_priority)
     db.commit()
     db.refresh(task)
     _log_changes(task, before, _snapshot(task))
@@ -188,7 +195,7 @@ def set_task_priority(task_id: int, body: TaskPriorityIn, db: Session = Depends(
     """תיוג מהיר מתוך רשימת המשימות, בלי לפתוח את המשימה."""
     task = _get(db, task_id)
     before = _snapshot(task)
-    task.priority = body.priority
+    timeframe.set_priority(task, body.priority)
     db.commit()
     db.refresh(task)
     _log_changes(task, before, _snapshot(task))
