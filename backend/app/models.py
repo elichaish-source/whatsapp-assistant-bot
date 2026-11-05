@@ -176,6 +176,9 @@ class BotMessage(Base):
     recurrence_id: Mapped[int | None] = mapped_column(
         ForeignKey("recurrences.id", ondelete="SET NULL")
     )
+    # השאילתה שהמודל כתב, כפי שנכתבה. נשמרת תמיד — גם כשנדחתה וגם
+    # כשנכשלה — כי זאת הדרך היחידה לראות אחר כך מה הבוט באמת ביקש לדעת
+    query_sql: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     cached_tokens: Mapped[int | None] = mapped_column(Integer)

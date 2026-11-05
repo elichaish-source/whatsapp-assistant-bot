@@ -112,11 +112,17 @@ def handle_message(wa_message_id: str, body: str) -> None:
         row.task_id = outcome.task_id
         row.fact_id = outcome.fact_id
         row.recurrence_id = outcome.recurrence_id
-        row.listed_task_ids = (
-            ",".join(str(item) for item in outcome.listed_task_ids)
-            if outcome.listed_task_ids
-            else None
-        )
+        row.query_sql = outcome.query_sql
+        if outcome.listed_task_ids:
+            row.listed_task_ids = ",".join(str(item) for item in outcome.listed_task_ids)
+        elif outcome.clear_list:
+            # ‏"" ולא None: השורה הזאת היא עכשיו המספור האחרון, והוא ריק.
+            # ככה "סיימתי 2" לא יחזור אחורה לרשימה של לפני השאילתה
+            row.listed_task_ids = ""
+        else:
+            row.listed_task_ids = None
+        if outcome.query_error:
+            row.error = outcome.query_error
         db.commit()
         _reply(settings.owner_phone, outcome.reply)
     except Exception:  # noqa: BLE001 - רץ ברקע, אין למי לזרוק

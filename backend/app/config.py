@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # כל כמה שניות נבדקות תזכורות שהגיע זמנן
     reminder_poll_seconds: int = 30
 
+    # --- שליפה חופשית (שלב 2ג1) ---
+    # הסיסמה של משתמש הקריאה-בלבד שהמיגרציה יוצרת. ריק = השאילתות רצות
+    # דרך המשתמש הרגיל, בעסקה לקריאה בלבד. בשרת זה לא אמור להישאר ריק
+    bot_readonly_password: str = ""
+
     session_days: int = 30
     login_code_minutes: int = 5
     login_code_max_attempts: int = 5
