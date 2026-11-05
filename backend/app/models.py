@@ -108,7 +108,10 @@ class Task(TimestampMixin, Base):
     __tablename__ = "tasks"
     __table_args__ = (
         CheckConstraint("status IN ('open', 'done')", name="task_status"),
-        CheckConstraint("priority IN ('today', 'week', 'later')", name="task_priority"),
+        CheckConstraint("priority IN ('today', 'tomorrow', 'week', 'later')", name="task_priority"),
+        CheckConstraint(
+            "source IN ('whatsapp', 'dashboard', 'email', 'claude')", name="task_source"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -127,8 +130,11 @@ class Task(TimestampMixin, Base):
     reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     priority: Mapped[str] = mapped_column(String(10), default="week", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
-    # נוצרה מהבוט בוואטסאפ ולא מהדשבורד
-    from_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # מאיפה המשימה הגיעה. מחרוזת ולא בוליאני, כדי שמקור נוסף — מייל,
+    # קלוד — יהיה ערך נוסף ולא שינוי מבני
+    source: Mapped[str] = mapped_column(String(20), default="dashboard", nullable=False)
+    # היום שבו נקבעה מסגרת הזמן. לפיו הלולאה מעבירה "מחר" ל"היום" ביום שאחרי
+    priority_set_on: Mapped[date | None] = mapped_column(Date)
     # ההתחייבות החוזרת שיצרה את המשימה. ריק במשימה רגילה
     recurrence_id: Mapped[int | None] = mapped_column(
         ForeignKey("recurrences.id", ondelete="SET NULL")
@@ -276,7 +282,7 @@ class Recurrence(TimestampMixin, Base):
         CheckConstraint("interval_unit IN ('week', 'month', 'year')", name="recurrence_unit"),
         CheckConstraint("interval_count BETWEEN 1 AND 60", name="recurrence_count"),
         CheckConstraint("lead_days BETWEEN 0 AND 365", name="recurrence_lead"),
-        CheckConstraint("priority IN ('today', 'week', 'later')", name="recurrence_priority"),
+        CheckConstraint("priority IN ('today', 'tomorrow', 'week', 'later')", name="recurrence_priority"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -130,7 +130,10 @@ def materialize(db: Session, moment: datetime) -> int:
             reminder_at=first_reminder(due, rec.lead_days, moment),
             priority=rec.priority,
             notes=rec.notes,
-            from_bot=rec.from_bot,
+            # המקור של המשימה הוא הערוץ שבו נרשמה ההתחייבות. העובדה שהיא
+            # חוזרת מסומנת בנפרד ב-recurrence_id
+            source="whatsapp" if rec.from_bot else "dashboard",
+            priority_set_on=today,
             recurrence_id=rec.id,
         )
         db.add(task)

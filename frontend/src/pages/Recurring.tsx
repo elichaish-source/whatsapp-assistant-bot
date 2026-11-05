@@ -4,7 +4,7 @@ import Modal from "../components/Modal";
 import RecurrenceForm from "../components/RecurrenceForm";
 import { formatDate } from "../format";
 import { nameOf, useLookups } from "../lookups";
-import type { Recurrence } from "../types";
+import { PRIORITY_LABELS, type Recurrence } from "../types";
 
 export default function Recurring() {
   const { clients, projects } = useLookups();
@@ -76,7 +76,10 @@ export default function Recurring() {
                 )}
                 {rec.lead_days > 0 && <span>התראה {rec.lead_days} ימים לפני</span>}
                 {subject(rec)}
-                {rec.priority === "today" && <span>היום</span>}
+                {/* רק המסגרות הדחופות. "השבוע" היא ברירת המחדל ולא מוסיפה מידע */}
+                {(rec.priority === "today" || rec.priority === "tomorrow") && (
+                  <span>{PRIORITY_LABELS[rec.priority]}</span>
+                )}
                 {rec.from_bot && <span className="pill">מוואטסאפ</span>}
               </div>
               {rec.notes && <div className="muted">{rec.notes}</div>}

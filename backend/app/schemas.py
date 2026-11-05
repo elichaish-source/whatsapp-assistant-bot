@@ -5,7 +5,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ProjectStatus = Literal["active", "done"]
 TaskStatus = Literal["open", "done"]
-Priority = Literal["today", "week", "later"]
+Priority = Literal["today", "tomorrow", "week", "later"]
+# מאיפה המשימה הגיעה. הדשבורד מציג אייקון לפי זה
+TaskSource = Literal["whatsapp", "dashboard", "email", "claude"]
 
 
 def _blank_to_none(value):
@@ -137,6 +139,7 @@ class TaskOut(ORMModel):
     reminder_at: datetime | None
     priority: Priority
     notes: str | None
+    source: TaskSource
     created_at: datetime
     updated_at: datetime
 

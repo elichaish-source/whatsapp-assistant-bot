@@ -191,7 +191,7 @@ def test_add_task_saves_and_reports(db):
     task = db.scalars(select(Task)).one()
     assert task.title == "להתקשר לדני"
     assert task.status == "open"
-    assert task.from_bot is True
+    assert task.source == "whatsapp"
     assert "נשמר: להתקשר לדני" in outcome.reply
     assert outcome.task_id == task.id
 
@@ -201,7 +201,7 @@ def test_add_task_saves_even_without_a_domain(db):
     outcome = actions.execute(db, Intent(action="add_task", title="להתקשר לזיצר"))
     task = db.scalars(select(Task)).one()
     assert task.domain_id is None
-    assert task.from_bot is True
+    assert task.source == "whatsapp"
     assert "נשמר: להתקשר לזיצר" in outcome.reply
     assert "לא שמרתי" not in outcome.reply
 
@@ -304,7 +304,7 @@ def test_complete_task_not_found(db):
 
 
 def test_cancel_removes_the_task_the_bot_just_created(db):
-    task = new_task(db, "להתקשר לדני", from_bot=True)
+    task = new_task(db, "להתקשר לדני", source="whatsapp")
     db.add(BotMessage(wa_message_id="add-1", intent="add_task", task_id=task.id))
     db.commit()
 
@@ -406,7 +406,7 @@ def test_without_history_the_message_looks_exactly_as_before():
 
 
 def saved_by_bot(db, title: str, **kwargs) -> Task:
-    task = new_task(db, title, from_bot=True, **kwargs)
+    task = new_task(db, title, source="whatsapp", **kwargs)
     db.add(BotMessage(wa_message_id=f"saved-{task.id}", intent="add_task", task_id=task.id))
     db.commit()
     return task

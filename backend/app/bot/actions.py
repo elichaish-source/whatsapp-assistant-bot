@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from .. import memory, recurring
+from .. import memory, recurring, timeframe
 from ..auth import aware, now
 from ..config import get_settings
 from ..models import BotMessage, Client, Domain, MemoryFact, Project, Recurrence, Task, TaskType
@@ -215,7 +215,8 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
         return Outcome(f"לא שמרתי: {exc.detail}")
 
     data.pop("status", None)
-    task = Task(**data, status="open", from_bot=True)
+    task = Task(**data, status="open", source="whatsapp")
+    timeframe.set_priority(task, task.priority)
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -463,7 +464,7 @@ def _cancel_last(db: Session) -> Outcome:
     task = db.get(Task, row.task_id)
     if not task:
         return Outcome("המשימה כבר לא קיימת.")
-    if not task.from_bot:
+    if task.source != "whatsapp":
         return Outcome("המשימה הזאת לא נוצרה מהבוט, אז לא אבטל אותה.")
 
     title = task.title
@@ -536,7 +537,7 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
     task = db.get(Task, row.task_id)
     if not task:
         return Outcome("המשימה כבר לא קיימת.")
-    if not task.from_bot:
+    if task.source != "whatsapp":
         return Outcome("המשימה הזאת לא נוצרה מהבוט, אז לא אעדכן אותה.")
 
     changed = False
@@ -549,7 +550,7 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
             setattr(task, field, value)
             changed = True
     if intent.priority:
-        task.priority = intent.priority
+        timeframe.set_priority(task, intent.priority)
         changed = True
     if intent.notes:
         task.notes = intent.notes
