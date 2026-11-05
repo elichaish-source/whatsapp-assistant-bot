@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, query } from "../api";
-import { formatDate, formatDateTime, isOverdue } from "../format";
 import { nameOf, useLookups } from "../lookups";
 import { PRIORITY_LABELS, type Priority, type Task } from "../types";
 import Modal from "./Modal";
@@ -138,18 +137,13 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
               <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} aria-label="בוצעה" />
               <div className="task-body" onClick={() => setEditing(t)}>
                 <div className="task-title">{t.title}</div>
-                <div className="task-meta">
-                  <span className="pill">{nameOf(domains, t.domain_id) || "ללא תחום"}</span>
-                  {t.task_type_id && <span>{nameOf(taskTypes, t.task_type_id)}</span>}
-                  {t.client_id && fixed.client_id === undefined && <span>👤 {nameOf(clients, t.client_id)}</span>}
-                  {t.project_id && <span>📁 {nameOf(projects, t.project_id)}</span>}
-                  {t.due_date && (
-                    <span className={t.status === "open" && isOverdue(t.due_date) ? "overdue" : ""}>
-                      📅 {formatDate(t.due_date)}
-                    </span>
-                  )}
-                  {t.reminder_at && <span>⏰ {formatDateTime(t.reminder_at)}</span>}
-                </div>
+                {/* רק הלקוח. התחום, הסוג, התאריך והתזכורת מופיעים בפתיחת המשימה,
+                    כדי שהשורה תישאר בגובה שאפשר לסרוק ברשימה ארוכה */}
+                {t.client_id && fixed.client_id === undefined && (
+                  <div className="task-meta">
+                    <span>👤 {nameOf(clients, t.client_id)}</span>
+                  </div>
+                )}
               </div>
               {/* מחוץ ל-task-body, כדי שלחיצה כאן לא תפתח את המשימה */}
               <div className="task-when" role="group" aria-label="מתי לטפל">
