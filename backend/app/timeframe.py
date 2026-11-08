@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from . import memory
 from .auth import now
 from .config import get_settings
 from .models import Task
@@ -49,8 +50,24 @@ def roll_tomorrow(db: Session, today: date) -> int:
             or_(Task.priority_set_on.is_(None), Task.priority_set_on < today),
         )
     ).all()
+    if not rows:
+        return 0
+
     for task in rows:
         set_priority(task, "today", today)
-    if rows:
-        db.commit()
+    db.commit()
+
+    # הרישום אחרי ה-commit ובמקור "system": משימה שזזה בלי שאף אחד נגע בה
+    # צריכה להשאיר עקבות, אחרת היא נראית כאילו קפצה לבד. אם השמירה נכשלה
+    # שום דבר לא זז, ולכן גם אין מה לרשום. אותו מבנה detail כמו בדשבורד,
+    # כדי שמסך היסטוריה עתידי יפרש פורמט אחד
+    for task in rows:
+        memory.observe(
+            "task_reprioritized",
+            "system",
+            task_id=task.id,
+            client_id=task.client_id,
+            detail=f"{task.title} · priority: tomorrow → today (התגלגלות אוטומטית)",
+        )
+
     return len(rows)
