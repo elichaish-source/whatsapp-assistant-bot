@@ -2,8 +2,10 @@
 
 from datetime import date, timedelta
 
+from sqlalchemy import select
+
 from app import timeframe
-from app.models import Task
+from app.models import Observation, Task
 
 
 def _task(db, title: str, **kwargs) -> Task:
@@ -94,3 +96,30 @@ def test_today_sorts_before_tomorrow_before_week(client):
         client.post("/api/tasks", json={"title": title, "priority": priority})
     titles = [t["title"] for t in client.get("/api/tasks").json()]
     assert titles == ["היום", "מחר", "השבוע", "בהמשך"]
+
+
+def test_rollover_leaves_a_trace_in_the_observation_log(db):
+    today = date(2026, 11, 5)
+    task = _task(db, "להחזיר טלפון", priority="tomorrow", priority_set_on=today - timedelta(days=1))
+
+    assert timeframe.roll_tomorrow(db, today) == 1
+
+    # observe פותח חיבור משלו, ולכן צריך לקרוא מחדש
+    db.expire_all()
+    rows = db.scalars(
+        select(Observation).where(Observation.task_id == task.id, Observation.kind == "task_reprioritized")
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].source == "system"
+    assert "tomorrow → today" in rows[0].detail
+    assert "התגלגלות אוטומטית" in rows[0].detail
+
+
+def test_nothing_is_logged_when_nothing_rolls(db):
+    today = date(2026, 11, 5)
+    _task(db, "נקבע היום", priority="tomorrow", priority_set_on=today)
+
+    assert timeframe.roll_tomorrow(db, today) == 0
+
+    db.expire_all()
+    assert db.scalars(select(Observation)).all() == []
