@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import memory, recurring, timeframe, waha
+from .. import memory, notify, recurring, timeframe, waha
 from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
@@ -26,6 +26,10 @@ log = logging.getLogger(__name__)
 # תזכורת שזמנה עבר מזמן (למשל השרת היה כבוי) לא נשלחת, רק מסומנת כטופלה,
 # כדי שהפעלה מחדש לא תציף את המשתמש בהודעות מהעבר
 STALE_AFTER = timedelta(hours=12)
+
+# פותח את הודעת הוואטסאפ, וגם הכותרת של התראת הפוש. קבוע ולא מחרוזת
+# כתובה פעמיים, כי הפוש גוזר אותו מהטקסט כדי לא לומר "תזכורת" פעמיים
+PREFIX = "תזכורת"
 
 
 def due_reminders(db: Session, moment: datetime) -> list[Task]:
@@ -45,11 +49,23 @@ def due_reminders(db: Session, moment: datetime) -> list[Task]:
 
 def reminder_text(db: Session, task: Task, moment: datetime | None = None) -> str:
     detail = describe(db, task)
-    text = f"תזכורת: {task.title}"
+    text = f"{PREFIX}: {task.title}"
     if task.recurrence_id and task.due_date and task.due_date < to_local(moment or now()).date():
         # בנדנוד אותה הודעה חוזרת כל יום. בלי הסימון הזה היא לא מסבירה למה
         text += " — עבר התאריך"
     return f"{text}\n{detail}" if detail else text
+
+
+def ring(text: str) -> None:
+    """הפעמון, אחרי שהודעת הוואטסאפ עצמה כבר יצאה.
+
+    ‏⚠️ הכשל נבלע כאן בכוונה. אם הוא היה עולה למעלה, הסבב הבא היה שולח
+    את אותה תזכורת שוב בוואטסאפ — וכפילות גרועה יותר מהתראה שלא הגיעה.
+    """
+    try:
+        notify.send(text.removeprefix(f"{PREFIX}: "), title=PREFIX)
+    except notify.NotifyError:
+        log.exception("שליחת התראת פוש נכשלה")
 
 
 def nags_again(task: Task, moment: datetime) -> bool:
@@ -74,8 +90,9 @@ def send_due_reminders(db: Session, moment: datetime | None = None) -> int:
         # השרת היה כבוי אתמול, בעוד "תזכיר לי בעוד עשר דקות" לא
         stale = task.recurrence_id is None and aware(task.reminder_at) < moment - STALE_AFTER
         if not stale and phone:
+            text = reminder_text(db, task, moment)
             try:
-                waha.send_text(phone, reminder_text(db, task, moment))
+                waha.send_text(phone, text)
                 sent += 1
                 # מתי יצאה תזכורת, כדי שאפשר יהיה ללמוד מתי היא עובדת
                 memory.observe(
@@ -85,6 +102,8 @@ def send_due_reminders(db: Session, moment: datetime | None = None) -> int:
                     client_id=task.client_id,
                     detail=task.title,
                 )
+                # אחרי הספירה והיומן: הפוש לא משנה אם התזכורת נשלחה
+                ring(text)
             except waha.WahaError:
                 # לא מסמנים כנשלח, כדי שהסבב הבא ינסה שוב
                 log.exception("שליחת תזכורת למשימה %s נכשלה", task.id)
