@@ -252,7 +252,7 @@ class Observation(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     # task_created, task_done, task_postponed, task_reclassified, fact_added...
     kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
-    # bot או dashboard
+    # bot, dashboard, או system — פעולה שהמערכת עשתה לבד, בלי שאף אחד ביקש
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="SET NULL"))
