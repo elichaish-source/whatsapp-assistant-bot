@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     # כל כמה שניות נבדקות תזכורות שהגיע זמנן
     reminder_poll_seconds: int = 30
 
+    # --- התראות פוש (שלב 2ה) ---
+    # ‏ntfy ברשת הפנימית של Docker. לא נחשף לאינטרנט אלא דרך Caddy
+    ntfy_url: str = "http://ntfy"
+    # שם הנושא. ריק = אין פוש, והתזכורות ממשיכות בוואטסאפ בלבד.
+    # השם עצמו הוא חלק מהסוד: מי שיודע אותו יכול להירשם אליו
+    ntfy_topic: str = ""
+    # טוקן עם הרשאת כתיבה לנושא הזה בלבד
+    ntfy_token: str = ""
+
     session_days: int = 30
     login_code_minutes: int = 5
     login_code_max_attempts: int = 5
