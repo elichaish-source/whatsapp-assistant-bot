@@ -308,16 +308,35 @@ button:disabled {
   padding: 6px 16px;
 }
 
+/* הכפתורים נמתחים לרוחב השורה בחלוקה שווה: רובע רוחב כל אחד. ככה משטח
+   הלחיצה גדול, והמקום של כל כפתור קבוע בכל השורות — אפשר ללחוץ בלי להסתכל.
+   ‏flex-basis: 220px הוא הרוחב שמתחתיו שם הלקוח יורד לשורה משלו */
+.task-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
 .task-when {
   display: flex;
+  flex: 1 1 220px;
   gap: 4px;
-  flex-shrink: 0;
 }
 
 .task-when button {
-  padding: 3px 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
   font-size: 0.82rem;
   color: var(--muted);
+}
+
+/* שם הלקוח נדחק לקצה השני של השורה */
+.task-bottom .task-meta {
+  margin-inline-start: auto;
+  margin-top: 0;
+  white-space: nowrap;
 }
 
 /* לשונית "הכול" היא היחידה בלי data-when, ולכן היא נשארת בצבע הראשי */
@@ -375,24 +394,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-/* במסך צר הכפתורים יורדים לשורה משלהם. בלי flex-basis מפורש הכותרת
-   מצטמצמת לעמודה צרה והטקסט נשבר מילה בשורה, במקום לדחוף אותם למטה.
-   ‏32px הם רוחב תיבת הסימון ועוד הרווח שאחריה */
-@media (max-width: 600px) {
-  .task {
-    flex-wrap: wrap;
-  }
-
-  .task-body {
-    flex-basis: calc(100% - 32px);
-  }
-
-  .task-when {
-    margin-inline-start: 32px;
-    flex-wrap: wrap;
-  }
-}
-
 .overdue {
   color: var(--danger);
   font-weight: 600;
@@ -427,21 +428,29 @@ button:disabled {
   gap: 8px;
 }
 
+/* שתי שורות: הכותרת לרוחב מלא למעלה, וכפתורי מסגרת הזמן מתחתיה. קודם
+   שלושתם חלקו שורה אחת, והכותרת נדחסה לעמודה צרה בין תיבת הסימון לכפתורים.
+   העמודה הראשונה היא תיבת הסימון, והשורה השנייה מתחילה אחריה כדי להתיישר
+   עם הכותרת */
 .task {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: start;
 }
 
 .task input[type="checkbox"] {
   width: 20px;
   height: 20px;
   margin-top: 2px;
-  flex-shrink: 0;
+}
+
+.task-body,
+.task-bottom {
+  grid-column: 2;
 }
 
 .task-body {
-  flex: 1;
   cursor: pointer;
   min-width: 0;
 }
