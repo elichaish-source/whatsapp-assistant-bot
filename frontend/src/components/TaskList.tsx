@@ -144,27 +144,30 @@ export default function TaskList({ fixed = {}, onChange }: { fixed?: TaskDefault
                   <span className="sr-only">{SOURCE_LABELS[t.source]}</span>
                   {t.title}
                 </div>
-                {/* רק הלקוח. התחום, הסוג, התאריך והתזכורת מופיעים בפתיחת המשימה,
-                    כדי שהשורה תישאר בגובה שאפשר לסרוק ברשימה ארוכה */}
+              </div>
+              {/* השורה השנייה, מחוץ ל-task-body כדי שלחיצה כאן לא תפתח את
+                  המשימה: הכפתורים לרוחב מלא, ושם הלקוח בקצה השני */}
+              <div className="task-bottom">
+                <div className="task-when" role="group" aria-label="מתי לטפל">
+                  {(Object.keys(PRIORITY_LABELS) as Priority[]).map((p) => (
+                    <button
+                      key={p}
+                      data-when={p}
+                      className={t.priority === p ? "on" : ""}
+                      aria-pressed={t.priority === p}
+                      onClick={() => setPriority(t, p)}
+                    >
+                      {PRIORITY_LABELS[p]}
+                    </button>
+                  ))}
+                </div>
+                {/* רק הלקוח. התחום, הסוג, התאריך והתזכורת מופיעים בפתיחת
+                    המשימה, כדי שהכרטיס יישאר נמוך ברשימה ארוכה */}
                 {t.client_id && fixed.client_id === undefined && (
                   <div className="task-meta">
                     <span>👤 {nameOf(clients, t.client_id)}</span>
                   </div>
                 )}
-              </div>
-              {/* מחוץ ל-task-body, כדי שלחיצה כאן לא תפתח את המשימה */}
-              <div className="task-when" role="group" aria-label="מתי לטפל">
-                {(Object.keys(PRIORITY_LABELS) as Priority[]).map((p) => (
-                  <button
-                    key={p}
-                    data-when={p}
-                    className={t.priority === p ? "on" : ""}
-                    aria-pressed={t.priority === p}
-                    onClick={() => setPriority(t, p)}
-                  >
-                    {PRIORITY_LABELS[p]}
-                  </button>
-                ))}
               </div>
             </li>
           ))}
