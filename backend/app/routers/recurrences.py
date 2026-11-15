@@ -101,11 +101,17 @@ def update_recurrence(
         or rec.interval_unit != body.interval_unit
         or rec.interval_count != body.interval_count
     )
+    # הוכרע על ידי המשתמש 16.11.2026: הפעלה מחדש אחרי השהיה מדלגת על המחזורים
+    # שעברו בזמן ההשהיה. בלי זה נוצרה מיד משימה על מחזור ישן, ואחרי שסומנה —
+    # עוד אחת על כל מחזור שהוחמץ
+    resumed = not rec.active and body.active
     before = f"{rec.title} · {recurring.next_due(rec)}"
     for field, value in body.model_dump().items():
         setattr(rec, field, value)
     if anchor_changed:
         rec.cycle = 0
+        recurring.catch_up(rec, recurring.today_local())
+    elif resumed:
         recurring.catch_up(rec, recurring.today_local())
     db.commit()
     db.refresh(rec)
