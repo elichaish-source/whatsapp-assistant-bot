@@ -53,12 +53,10 @@ def new_task(db, title: str, **kwargs) -> Task:
     return task
 
 
-def family(db, name: str = "נדל\"ן בדיקה") -> ClientFamily:
-    item = ClientFamily(name=name, sort_order=99)
-    db.add(item)
-    db.commit()
-    db.refresh(item)
-    return item
+def family(db, name: str = "יעדים") -> ClientFamily:
+    """משפחה מהרשימה שהמיגרציה זורעת. רשימות העזר לא מתנקות בין בדיקות,
+    ולכן אין ליצור כאן משפחות חדשות."""
+    return db.scalars(select(ClientFamily).where(ClientFamily.name == name)).one()
 
 
 @pytest.fixture
@@ -325,18 +323,18 @@ def test_an_inactive_client_can_be_brought_back(db, say):
 
 
 def test_the_model_sees_the_client_families(db):
-    fam = family(db, "משפחת בדיקה")
-    assert f"{fam.id}: משפחת בדיקה" in actions.build_context(db)
+    fam = family(db, "עסק פרטי")
+    assert f"{fam.id}: עסק פרטי" in actions.build_context(db)
 
 
 def test_adding_a_family_keeps_the_ones_the_client_already_has(db, say):
-    first, second = family(db, "ראשונה"), family(db, "שנייה")
+    first, second = family(db, "יעדים"), family(db, "עסק פרטי")
     client = new_client(db, "דני כהן")
     client.families = [first]
     db.commit()
     say(Intent(action="update_client", client_id=client.id, family_id=second.id))
     db.refresh(client)
-    assert sorted(item.name for item in client.families) == ["ראשונה", "שנייה"]
+    assert sorted(item.name for item in client.families) == ["יעדים", "עסק פרטי"]
 
 
 def test_update_client_that_cannot_be_found_or_has_nothing_to_change(db, say):
