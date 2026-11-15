@@ -84,7 +84,7 @@ SCHEMA_DOC = """מבנה הטבלאות לשאילתות:
   source ('whatsapp'/'dashboard'/'email'/'claude'), recurrence_id, created_at
 - clients: id, name, phone, email, tax_id, address, notes, is_active, created_at
 - projects: id, name, domain_id, client_id, description, due_date,
-  status ('active'/'done'/'paused'), created_at
+  status ('active'/'done'), created_at
 - domains: id, name, sort_order, requires_client
 - task_types: id, name, sort_order
 - recurrences: id, title, interval_unit ('week'/'month'/'year'), interval_count,
@@ -151,7 +151,23 @@ def _short_error(exc: Exception) -> str:
     return first[:300]
 
 
-def cell(value: object) -> str:
+# ערכים שנשמרים באנגלית ומוצגים בעברית, באותן תוויות של הדשבורד. המיפוי
+# הוא לפי שם העמודה ולא לפי הערך: משימה שהכותרת שלה היא במקרה "week"
+# לא מתורגמת. עמודה שהמודל נתן לה שם אחר (AS) נשארת כמו שהיא
+LABELS: dict[str, dict[str, str]] = {
+    "priority": {"today": "היום", "tomorrow": "מחר", "week": "השבוע", "later": "בהמשך"},
+    "status": {"open": "פתוח", "done": "הסתיים", "active": "פעיל"},
+    "source": {
+        "whatsapp": "מוואטסאפ",
+        "dashboard": "מהמערכת",
+        "email": "מהמייל",
+        "claude": "מקלוד",
+    },
+    "interval_unit": {"week": "שבוע", "month": "חודש", "year": "שנה"},
+}
+
+
+def cell(value: object, column: str = "") -> str:
     if value is None:
         return "—"
     if isinstance(value, bool):
@@ -162,6 +178,8 @@ def cell(value: object) -> str:
         return f"{value:%d/%m/%Y}"
     if isinstance(value, Decimal):
         return f"{value:g}"
+    if isinstance(value, str):
+        return LABELS.get(column, {}).get(value, value)
     return str(value)
 
 
@@ -170,6 +188,10 @@ def render(columns: list[str], rows: list[tuple], heading: str) -> str:
 
     עמודת id לא מופיעה בטקסט. היא משמשת למספור, כדי ש"סיימתי 2" יעבוד גם
     על תוצאה של שאילתה ולא רק על רשימה.
+
+    שורה יחידה בלי id היא תשובה ולא רשימה — ספירה, סכום, שם אחד — ולכן
+    היא יוצאת בשורה אחת. "כמה פתוחות להיום" ענה פעם "(1):" ומתחתיו
+    "1. 13". שורה יחידה **עם** id נשארת ממוספרת, כי אליה אפשר להתייחס.
     """
     if not rows:
         return f"{heading}: אין תוצאות."
@@ -177,10 +199,16 @@ def render(columns: list[str], rows: list[tuple], heading: str) -> str:
     keep = [index for index, name in enumerate(columns) if name != "id"] or list(
         range(len(columns))
     )
+
+    def line(row: tuple) -> str:
+        return " · ".join(cell(row[index], columns[index]) for index in keep)
+
+    if len(rows) == 1 and "id" not in columns:
+        return f"{heading}: {line(rows[0])}"
+
     lines = [f"{heading} ({len(rows)}):"]
     for number, row in enumerate(rows[:ROWS_SHOWN], start=1):
-        values = " · ".join(cell(row[index]) for index in keep)
-        lines.append(f"{number}. {values}")
+        lines.append(f"{number}. {line(row)}")
     if len(rows) > ROWS_SHOWN:
         lines.append(f"...ועוד {len(rows) - ROWS_SHOWN}")
     return "\n".join(lines)
