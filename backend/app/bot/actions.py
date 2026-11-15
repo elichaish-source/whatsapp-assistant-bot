@@ -18,7 +18,17 @@ from sqlalchemy.orm import Session
 from .. import memory, queries, recurring, timeframe
 from ..auth import aware, now
 from ..config import get_settings
-from ..models import BotMessage, Client, Domain, MemoryFact, Project, Recurrence, Task, TaskType
+from ..models import (
+    BotMessage,
+    Client,
+    ClientFamily,
+    Domain,
+    MemoryFact,
+    Project,
+    Recurrence,
+    Task,
+    TaskType,
+)
 from ..routers.tasks import resolve_task_fields
 from ..schemas import TaskIn
 from .intent import Intent
@@ -76,6 +86,20 @@ def build_context(db: Session) -> str:
         lines.extend(f"  {item.id}: {item.name}" for item in clients)
     else:
         lines.append("  (אין)")
+
+    # רק כדי שאפשר יהיה להחזיר לקוח לפעיל, ושלא ייפתח לקוח כפול. משימות
+    # חדשות לא משויכות אליהם
+    inactive = db.scalars(
+        select(Client).where(Client.is_active.is_(False)).order_by(Client.name)
+    ).all()
+    if inactive:
+        lines.append("לקוחות לא פעילים — רק ל-update_client, לא לשיוך משימות (id: שם):")
+        lines.extend(f"  {item.id}: {item.name}" for item in inactive)
+
+    families = db.scalars(select(ClientFamily).order_by(ClientFamily.sort_order)).all()
+    if families:
+        lines.append("משפחות לקוחות (id: שם):")
+        lines.extend(f"  {item.id}: {item.name}" for item in families)
 
     projects = db.scalars(
         select(Project).where(Project.status == "active").order_by(Project.name)
@@ -630,6 +654,11 @@ def _confirm(db: Session, before_id: int | None) -> Outcome:
         memory.observe("task_deleted", "bot", client_id=client_id, detail=title)
         return Outcome(f"נמחק: {title}", clear_list=True)
 
+    if pending.get("kind") in ("add_client", "add_project"):
+        from . import entities
+
+        return entities.confirmed(db, pending)
+
     return Outcome("אין פעולה שמחכה לאישור.")
 
 
@@ -637,6 +666,8 @@ def _decline(db: Session, before_id: int | None) -> Outcome:
     pending, _ = _pending(db, before_id)
     if pending is None:
         return Outcome("בסדר.")
+    if pending.get("kind") in ("add_client", "add_project"):
+        return Outcome("בסדר, לא יצרתי.")
     return Outcome("בסדר, לא נגעתי.")
 
 
@@ -721,7 +752,18 @@ def _last_bot_task_row(db: Session) -> BotMessage | None:
 
 
 # מה ש"בטל" יודע לבטל: משימה שנוצרה, תיקון שלה, או עובדה שנרשמה בזיכרון
-_UNDOABLE = ("add_task", "add_recurring", "update_last", "update_task", "remember")
+_ENTITY_ACTIONS = ("add_client", "update_client", "add_project", "update_project")
+# confirm נכלל בגלל יצירה שאושרה ("ליצור בכל זאת?" ואז "כן"). מחיקה שאושרה
+# לא משאירה אחריה מה לבטל, ולכן השורה שלה לא נמצאת בחיפוש שלמטה
+_UNDOABLE = (
+    "add_task",
+    "add_recurring",
+    "update_last",
+    "update_task",
+    "remember",
+    "confirm",
+    *_ENTITY_ACTIONS,
+)
 
 
 def _last_bot_action_row(db: Session) -> BotMessage | None:
@@ -738,6 +780,7 @@ def _last_bot_action_row(db: Session) -> BotMessage | None:
                 BotMessage.task_id.is_not(None),
                 BotMessage.fact_id.is_not(None),
                 BotMessage.recurrence_id.is_not(None),
+                BotMessage.undo_json.is_not(None),
             ),
         )
         .order_by(BotMessage.id.desc())
@@ -755,6 +798,14 @@ def _cancel_last(db: Session) -> Outcome:
         return Outcome("אין מה לבטל.")
     if row.created_at and now() - aware(row.created_at) > CANCEL_WINDOW:
         return Outcome("עבר יותר מדי זמן מאז השמירה. אפשר למחוק מהדשבורד.")
+
+    if row.undo_json:
+        data = json.loads(row.undo_json)
+        if data.get("kind"):
+            # לקוח או פרויקט. לעדכון משימה אין kind, והוא מטופל למטה
+            from . import entities
+
+            return entities.undo(db, row, data)
 
     if row.fact_id:
         fact = db.get(MemoryFact, row.fact_id)
@@ -935,6 +986,11 @@ def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcom
         return _confirm(db, before_id)
     if intent.action == "decline":
         return _decline(db, before_id)
+    if intent.action in _ENTITY_ACTIONS:
+        # ייבוא מאוחר: entities נשען על Outcome שמוגדר כאן
+        from . import entities
+
+        return getattr(entities, intent.action)(db, intent)
     if intent.action == "add_task":
         return _add_task(db, intent)
     if intent.action == "add_recurring":

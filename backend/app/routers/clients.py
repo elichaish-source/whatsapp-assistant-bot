@@ -34,7 +34,7 @@ def _get(db: Session, client_id: int) -> Client:
     return client
 
 
-def _apply(db: Session, client: Client, body: ClientIn) -> Client:
+def save_client(db: Session, client: Client, body: ClientIn) -> Client:
     data = body.model_dump(exclude={"family_ids"})
     for key, value in data.items():
         setattr(client, key, value)
@@ -78,12 +78,12 @@ def get_client(client_id: int, db: Session = Depends(get_db)):
 
 @router.post("", response_model=ClientOut, status_code=201)
 def create_client(body: ClientIn, db: Session = Depends(get_db)):
-    return _out(_apply(db, Client(), body), 0)
+    return _out(save_client(db, Client(), body), 0)
 
 
 @router.put("/{client_id}", response_model=ClientOut)
 def update_client(client_id: int, body: ClientIn, db: Session = Depends(get_db)):
-    client = _apply(db, _get(db, client_id), body)
+    client = save_client(db, _get(db, client_id), body)
     return _out(client, _open_tasks(db, [client.id]).get(client.id, 0))
 
 
