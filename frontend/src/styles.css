@@ -7,7 +7,11 @@
   --primary: #0f766e;
   --primary-text: #ffffff;
   --danger: #b42318;
-  --high: #c2410c;
+  /* ארבע מסגרות הזמן. סולם דחיפות: אדום, כתום, טורקיז, אפור */
+  --when-today: #b42318;
+  --when-tomorrow: #c2410c;
+  --when-week: #0f766e;
+  --when-later: #64748b;
   --pill: #eef2f6;
   --selected: #ccfbf1;
 }
@@ -22,7 +26,10 @@
     --primary: #2dd4bf;
     --primary-text: #0b1f1d;
     --danger: #f87171;
-    --high: #fb923c;
+  --when-today: #f87171;
+  --when-tomorrow: #fb923c;
+  --when-week: #2dd4bf;
+  --when-later: #94a3b8;
     --pill: #262c37;
     --selected: #134e4a;
   }
@@ -301,19 +308,38 @@ button:disabled {
   padding: 6px 16px;
 }
 
+/* הכפתורים נמתחים לרוחב השורה בחלוקה שווה: רובע רוחב כל אחד. ככה משטח
+   הלחיצה גדול, והמקום של כל כפתור קבוע בכל השורות — אפשר ללחוץ בלי להסתכל.
+   ‏flex-basis: 220px הוא הרוחב שמתחתיו שם הלקוח יורד לשורה משלו */
+.task-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
 .task-when {
   display: flex;
+  flex: 1 1 220px;
   gap: 4px;
-  flex-shrink: 0;
 }
 
 .task-when button {
-  padding: 3px 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
   font-size: 0.82rem;
   color: var(--muted);
 }
 
-/* המצב הנבחר, גם בלשונית וגם בשורה */
+/* שם הלקוח נדחק לקצה השני של השורה */
+.task-bottom .task-meta {
+  margin-inline-start: auto;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+/* לשונית "הכול" היא היחידה בלי data-when, ולכן היא נשארת בצבע הראשי */
 .when-tabs button.on,
 .task-when button.on {
   background: var(--primary);
@@ -321,23 +347,51 @@ button:disabled {
   color: var(--primary-text);
 }
 
-/* "היום" בולט משאר השניים, כדי שיימצא במבט אחד */
+/* ארבע מסגרות הזמן, ארבעה צבעים: סולם דחיפות מאדום לאפור. קודם "השבוע"
+   ו"בהמשך" קיבלו שתיהן את הצבע הראשי, ולא היה אפשר להבדיל ביניהן במבט */
 .when-tabs button.on[data-when="today"],
 .task-when button.on[data-when="today"] {
-  background: var(--high);
-  border-color: var(--high);
-  color: #fff;
+  background: var(--when-today);
+  border-color: var(--when-today);
+  color: var(--primary-text);
 }
 
-/* במסך צר הכפתורים יורדים לשורה משלהם במקום להצטופף */
-@media (max-width: 600px) {
-  .task {
-    flex-wrap: wrap;
-  }
+.when-tabs button.on[data-when="tomorrow"],
+.task-when button.on[data-when="tomorrow"] {
+  background: var(--when-tomorrow);
+  border-color: var(--when-tomorrow);
+  color: var(--primary-text);
+}
 
-  .task-when {
-    margin-inline-start: 32px;
-  }
+.when-tabs button.on[data-when="week"],
+.task-when button.on[data-when="week"] {
+  background: var(--when-week);
+  border-color: var(--when-week);
+  color: var(--primary-text);
+}
+
+.when-tabs button.on[data-when="later"],
+.task-when button.on[data-when="later"] {
+  background: var(--when-later);
+  border-color: var(--when-later);
+  color: var(--primary-text);
+}
+
+/* מקור המשימה: אייקון קטן לפני הכותרת, ללא טקסט */
+.task-source {
+  margin-inline-end: 6px;
+  font-size: 0.9rem;
+  opacity: 0.75;
+}
+
+/* לקורא מסך בלבד: האייקון לבדו לא אומר כלום למי שלא רואה אותו */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .overdue {
@@ -374,21 +428,29 @@ button:disabled {
   gap: 8px;
 }
 
+/* שתי שורות: הכותרת לרוחב מלא למעלה, וכפתורי מסגרת הזמן מתחתיה. קודם
+   שלושתם חלקו שורה אחת, והכותרת נדחסה לעמודה צרה בין תיבת הסימון לכפתורים.
+   העמודה הראשונה היא תיבת הסימון, והשורה השנייה מתחילה אחריה כדי להתיישר
+   עם הכותרת */
 .task {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: start;
 }
 
 .task input[type="checkbox"] {
   width: 20px;
   height: 20px;
   margin-top: 2px;
-  flex-shrink: 0;
+}
+
+.task-body,
+.task-bottom {
+  grid-column: 2;
 }
 
 .task-body {
-  flex: 1;
   cursor: pointer;
   min-width: 0;
 }

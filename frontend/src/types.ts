@@ -32,7 +32,10 @@ export interface Project {
   open_tasks: number;
 }
 
-export type Priority = "today" | "week" | "later";
+export type Priority = "today" | "tomorrow" | "week" | "later";
+
+// מאיפה המשימה הגיעה. email ו-claude שמורים לאינטגרציות הבאות
+export type TaskSource = "whatsapp" | "dashboard" | "email" | "claude";
 
 export interface Task {
   id: number;
@@ -47,12 +50,30 @@ export interface Task {
   reminder_at: string | null;
   priority: Priority;
   notes: string | null;
+  source: TaskSource;
 }
 
+// הסדר כאן הוא סדר הכפתורים במסך, ולכן "מחר" יושב בין היום לשבוע
 export const PRIORITY_LABELS: Record<Priority, string> = {
   today: "היום",
+  tomorrow: "מחר",
   week: "השבוע",
   later: "בהמשך",
+};
+
+// אייקון בלבד בשורת המשימה. השם המלא יושב ב-title, ונקרא במרחף ובקורא מסך
+export const SOURCE_ICONS: Record<TaskSource, string> = {
+  whatsapp: "💬",
+  dashboard: "🖥️",
+  email: "✉️",
+  claude: "✨",
+};
+
+export const SOURCE_LABELS: Record<TaskSource, string> = {
+  whatsapp: "מוואטסאפ",
+  dashboard: "נוצרה מהמערכת",
+  email: "מהמייל",
+  claude: "מקלוד",
 };
 
 export interface MemoryFact {

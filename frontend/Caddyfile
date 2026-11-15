@@ -25,7 +25,32 @@
 		@manifest path /manifest.webmanifest
 		header @manifest Content-Type "application/manifest+json"
 
+		# ‏Vite נותן לכל קובץ ב-assets שם שכולל חתימה של תוכנו, ולכן גרסה
+		# חדשה היא תמיד שם חדש והקובץ הקיים אף פעם לא משתנה
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+
+		# כל השאר, ובראשו index.html, מצביע על גרסת הקוד הנוכחית. בלי זה
+		# הדפדפן נשען על ניחוש משלו, ממשיך להגיש index.html ישן אחרי פריסה,
+		# ומכאן טוען את ה-assets של הגרסה הקודמת. no-cache לא אוסר על מטמון,
+		# אלא מחייב לוודא מול השרת שהעותק עדיין עדכני
+		@app not path /assets/*
+		header @app Cache-Control "no-cache"
+
 		try_files {path} /index.html
 		file_server
 	}
+}
+
+# הפעמון: שרת ההתראות. כתובת נפרדת ולא נתיב, כי ntfy מתחת לנתיב שובר את
+# הקישורים הפנימיים שלו. אין כאן ברירת מחדל חובה — בלי NTFY_DOMAIN הבלוק
+# מצביע לכתובת ‎.localhost‎, שעבורה Caddy מנפיק תעודה פנימית ולא פונה
+# ל-Let's Encrypt, כך שהעדר המפתח לא מפיל את הפריסה.
+#
+# אין צורך בשכבת הגנה כאן: ntfy עצמו דורש טוקן לכל קריאה ולכל כתיבה
+# (NTFY_AUTH_DEFAULT_ACCESS=deny-all), והאפליקציה בטלפון מחזיקה חיבור
+# ארוך לנתיב הזה — ש-Caddy מזרים בלי לאגור, בניגוד ל-nginx
+{$NTFY_DOMAIN:ntfy.localhost} {
+	header -Server
+	reverse_proxy ntfy:80
 }

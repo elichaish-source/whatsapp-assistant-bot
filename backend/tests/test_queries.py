@@ -5,6 +5,7 @@
 הסיבה שיש כאן גם בדיקה שהמסד עצמו מסרב לכתוב.
 """
 
+import re
 from datetime import date, datetime
 
 import pytest
@@ -103,6 +104,24 @@ def test_a_real_query_returns_rows(db):
     columns, rows = queries.run(queries.gate("select id, title from tasks"))
     assert columns == ["id", "title"]
     assert [row[1] for row in rows] == ["לשלם ארנונה"]
+
+
+def test_the_schema_the_model_sees_matches_the_real_tables(db):
+    """⚠️ כל עמודה שהמודל שומע עליה חייבת להתקיים במסד.
+
+    התיאור הוא טקסט חופשי ולא נגזר מהמודלים, ולכן מיגרציה ששינתה עמודה
+    לא שוברת שום בדיקה אחרת: בשלב 2ג1 התיאור המשיך להזכיר את from_bot
+    בטבלת המשימות אחרי שהוחלפה ב-source, והמודל היה כותב שאילתה שנכשלת.
+    הבדיקות לא קוראות ל-API, ולכן רק השוואה כזאת תופסת את זה.
+    """
+    entries = re.findall(r"^- (\w+): (.+?)(?=^- |^\S)", queries.SCHEMA_DOC, re.M | re.S)
+    assert len(entries) >= 6
+    for table, body in entries:
+        columns = [c.strip() for c in re.sub(r"\([^)]*\)", "", body).split(",")]
+        assert all(columns), (table, columns)
+        # ‏LIMIT 0 בודק שמות בלי להחזיר שורות, ודרך אותה חומה של שאילתה אמיתית
+        found, _ = queries.run(queries.gate(f"select {', '.join(columns)} from {table}"))
+        assert found == columns
 
 
 # --- ניסוח התשובה ---

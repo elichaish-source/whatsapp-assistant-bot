@@ -52,11 +52,33 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
 
+  # הפעמון. וואטסאפ לא מתריע על הודעה שאדם שולח לעצמו, ולכן התזכורות
+  # יוצאות גם כהתראת פוש. ראה SPEC.md, "התראות פוש"
+  ntfy:
+    image: binwiederhier/ntfy:v2.37.2
+    restart: unless-stopped
+    command: serve
+    environment:
+      # ‏NTFY_DOMAIN אינו חובה בכוונה: בלעדיו הכול עולה והפוש פשוט לא
+      # נשלח. מפתח חסר לא מפיל את המערכת, כמו בשאר מפתחות הבוט
+      NTFY_BASE_URL: https://${NTFY_DOMAIN:-ntfy.localhost}
+      NTFY_LISTEN_HTTP: ":80"
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
+      # ⚠️ בלי זה השרת הוא ממסר התראות פתוח לכל האינטרנט
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+      TZ: Asia/Jerusalem
+    volumes:
+      - ntfy-data:/var/lib/ntfy
+    # בלי ports: רק Caddy מגיע אליו, ברשת הפנימית של Docker
+
   caddy:
     build: ./frontend
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:?חסר DOMAIN ב-.env}
+      NTFY_DOMAIN: ${NTFY_DOMAIN:-ntfy.localhost}
     ports:
       - "80:80"
       - "443:443"
@@ -66,6 +88,7 @@ services:
       - caddy-config:/config
     depends_on:
       - backend
+      - ntfy
 
   duckdns:
     image: lscr.io/linuxserver/duckdns:latest
@@ -80,3 +103,4 @@ volumes:
   waha-sessions:
   caddy-data:
   caddy-config:
+  ntfy-data:

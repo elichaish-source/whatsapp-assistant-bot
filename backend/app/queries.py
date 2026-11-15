@@ -79,8 +79,9 @@ class QueryFailed(Exception):
 # ולא נבנה מחדש בכל הודעה
 SCHEMA_DOC = """מבנה הטבלאות לשאילתות:
 - tasks: id, title, status ('open'/'done'), done_at, domain_id, task_type_id,
-  client_id, project_id, due_date, reminder_at, priority ('today'/'week'/'later'),
-  notes, from_bot, recurrence_id, created_at
+  client_id, project_id, due_date, reminder_at,
+  priority ('today'/'tomorrow'/'week'/'later'), notes,
+  source ('whatsapp'/'dashboard'/'email'/'claude'), recurrence_id, created_at
 - clients: id, name, phone, email, tax_id, address, notes, is_active, created_at
 - projects: id, name, domain_id, client_id, description, due_date,
   status ('active'/'done'/'paused'), created_at

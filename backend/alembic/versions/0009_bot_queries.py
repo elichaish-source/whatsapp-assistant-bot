@@ -9,8 +9,8 @@
 ‏ALTER DEFAULT PRIVILEGES, כדי שטבלה חדשה שתיווצר בעתיד **לא** תהיה
 גלויה לבוט מעצם קיומה. הרחבת הרשימה היא החלטה שמישהו צריך לקבל.
 
-Revision ID: 0008
-Revises: 0007
+Revision ID: 0009
+Revises: 0008
 """
 
 import os
@@ -18,8 +18,8 @@ import os
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0008"
-down_revision = "0007"
+revision = "0009"
+down_revision = "0008"
 branch_labels = None
 depends_on = None
 

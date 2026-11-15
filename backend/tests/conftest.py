@@ -19,7 +19,7 @@ from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
-from app import waha  # noqa: E402
+from app import notify, waha  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -51,6 +51,18 @@ def sent(monkeypatch):
     messages = []
     monkeypatch.setattr(waha, "send_text", lambda phone, body: messages.append((phone, body)))
     return messages
+
+
+@pytest.fixture
+def pushed(monkeypatch):
+    """תופס את התראות הפוש. לא autouse: בלי נושא מוגדר אין פוש בכלל."""
+    calls = []
+    monkeypatch.setattr(
+        notify,
+        "send",
+        lambda message, title, click=None: calls.append((title, message)),
+    )
+    return calls
 
 
 @pytest.fixture
