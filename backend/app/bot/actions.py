@@ -659,6 +659,11 @@ def _confirm(db: Session, before_id: int | None) -> Outcome:
 
         return entities.confirmed(db, pending)
 
+    if pending.get("kind") in ("add_domain", "add_task_type"):
+        from . import lists
+
+        return lists.confirmed(db, pending)
+
     return Outcome("אין פעולה שמחכה לאישור.")
 
 
@@ -666,7 +671,7 @@ def _decline(db: Session, before_id: int | None) -> Outcome:
     pending, _ = _pending(db, before_id)
     if pending is None:
         return Outcome("בסדר.")
-    if pending.get("kind") in ("add_client", "add_project"):
+    if pending.get("kind") in ("add_client", "add_project", "add_domain", "add_task_type"):
         return Outcome("בסדר, לא יצרתי.")
     return Outcome("בסדר, לא נגעתי.")
 
@@ -753,6 +758,7 @@ def _last_bot_task_row(db: Session) -> BotMessage | None:
 
 # מה ש"בטל" יודע לבטל: משימה שנוצרה, תיקון שלה, או עובדה שנרשמה בזיכרון
 _ENTITY_ACTIONS = ("add_client", "update_client", "add_project", "update_project")
+_LIST_ACTIONS = ("add_domain", "add_task_type", "pause_recurrence", "resume_recurrence")
 # confirm נכלל בגלל יצירה שאושרה ("ליצור בכל זאת?" ואז "כן"). מחיקה שאושרה
 # לא משאירה אחריה מה לבטל, ולכן השורה שלה לא נמצאת בחיפוש שלמטה
 _UNDOABLE = (
@@ -763,6 +769,7 @@ _UNDOABLE = (
     "remember",
     "confirm",
     *_ENTITY_ACTIONS,
+    *_LIST_ACTIONS,
 )
 
 
@@ -803,8 +810,10 @@ def _cancel_last(db: Session) -> Outcome:
         data = json.loads(row.undo_json)
         if data.get("kind"):
             # לקוח או פרויקט. לעדכון משימה אין kind, והוא מטופל למטה
-            from . import entities
+            from . import entities, lists
 
+            if data["kind"] in lists.UNDO_KINDS:
+                return lists.undo(db, row, data)
             return entities.undo(db, row, data)
 
     if row.fact_id:
@@ -986,6 +995,10 @@ def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcom
         return _confirm(db, before_id)
     if intent.action == "decline":
         return _decline(db, before_id)
+    if intent.action in _LIST_ACTIONS:
+        from . import lists
+
+        return getattr(lists, intent.action)(db, intent)
     if intent.action in _ENTITY_ACTIONS:
         # ייבוא מאוחר: entities נשען על Outcome שמוגדר כאן
         from . import entities

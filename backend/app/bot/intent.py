@@ -38,6 +38,10 @@ Action = Literal[
     "update_client",
     "add_project",
     "update_project",
+    "add_domain",
+    "add_task_type",
+    "pause_recurrence",
+    "resume_recurrence",
     "remember",
     "clarify",
     "unknown",
@@ -81,6 +85,8 @@ class Intent(BaseModel):
     address: str = ""
     family_id: int = 0
     active: Literal["", "yes", "no"] = ""
+    # add_domain. false ולא null, מאותה סיבה
+    requires_client: bool = False
     # clarify
     question: str | None = None
 
@@ -144,6 +150,10 @@ INTENT_SCHEMA: dict = {
                 "update_client",
                 "add_project",
                 "update_project",
+                "add_domain",
+                "add_task_type",
+                "pause_recurrence",
+                "resume_recurrence",
                 "remember",
                 "clarify",
                 "unknown",
@@ -175,6 +185,7 @@ INTENT_SCHEMA: dict = {
         "address": {"type": "string"},
         "family_id": {"type": "integer"},
         "active": {"type": "string", "enum": ["", "yes", "no"]},
+        "requires_client": {"type": "boolean"},
     },
     "required": [
         "action",
@@ -204,6 +215,7 @@ INTENT_SCHEMA: dict = {
         "address",
         "family_id",
         "active",
+        "requires_client",
     ],
 }
 
@@ -265,6 +277,17 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   האתר עד סוף ינואר", "תעביר את פרויקט האתר לתחום שיווק". ב-project_id
   המזהה מהרשימה, ורק מה שמשתנה. active הוא "no" כשהפרויקט הסתיים או נסגר,
   ואחרת "". name רק אם המשתמש ביקש לשנות את שם הפרויקט.
+- add_domain: המשתמש מבקש במפורש לפתוח תחום חדש. "תחום חדש: הפקות", "תוסיף
+  תחום נדל"ן". ב-name שם התחום. requires_client הוא true רק אם המשתמש אמר
+  שמשימות בתחום חייבות לקוח ("מחייב לקוח", "תמיד עם לקוח"), ואחרת false.
+- add_task_type: המשתמש מבקש במפורש לפתוח סוג משימה חדש. "סוג משימה חדש:
+  נסיעה", "תוסיף סוג וידאו". ב-name שם הסוג.
+- pause_recurrence: המשתמש עוצר התחייבות חוזרת קיימת. "תפסיק את דוח
+  המע"מ", "תשהה את הגבייה החודשית", "אין צורך יותר בתזכורת על הביטוח כל
+  שנה". ב-task_text מילה או שתיים מהכותרת שלה, באותה דרך של משימות.
+- resume_recurrence: המשתמש מחזיר התחייבות שהושהתה. "תחזיר את דוח המע"מ",
+  "תפעיל מחדש את הגבייה". ב-task_text מילה או שתיים מהכותרת שלה. כשהמשתמש
+  אומר "תחזיר אותה" — קח את הכותרת מ"השיחה עד עכשיו".
 - remember: המשתמש מבקש לזכור משהו לטווח ארוך, ולא לבצע משימה. "תזכור ש...",
   "שים לב שתמיד...", "מעכשיו...". ב-fact כתוב מה שהמשתמש אמר ולא יותר: משפט
   אחד בגוף ראשון, שיהיה מובן גם בעוד חצי שנה. ⚠️ אל תוסיף מסקנה, כלל או הוראה
@@ -331,12 +354,18 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - ⚠️ אם ב-add_project או ב-update_client הוזכר לקוח שאינו מופיע ברשימות —
   clarify, ושאל אם לפתוח אותו קודם. אל תיצור פרויקט בלי הלקוח שהמשתמש ציין,
   ואל תבחר לקוח אחר בשם דומה.
+- pause_recurrence או delete_task? התחייבות חוזרת ("כל חודש", "החודשי",
+  "השנתי", או משהו שמופיע כהתחייבות) נעצרת ב-pause_recurrence. מחיקה של
+  התחייבות חוזרת נעשית בדשבורד בלבד.
+- תחום, סוג משימה או לקוח? "תחום" ו"סוג משימה" נפתחים רק כשהמשתמש אמר את
+  המילים האלה במפורש.
 - הודעה אחת היא פעולה אחת. אם המשתמש ביקש שתיים ("לקוח חדש משה כהן ותזכיר
   לי להתקשר אליו"), בצע את הראשונה בלבד.
 - כל שדה שאינו רלוונטי לפעולה שבחרת — null. יש שדות שבהם אין null לעולם:
   repeat_unit הוא "none" בכל פעולה שאינה add_recurring, ‏repeat_count,
-  ‏lead_days ו-family_id הם 0, ו-sql, ‏name, ‏phone, ‏email, ‏tax_id, ‏address
-  ו-active הם מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
+  ‏lead_days ו-family_id הם 0, ‏requires_client הוא false, ו-sql, ‏name,
+  ‏phone, ‏email, ‏tax_id, ‏address ו-active הם מחרוזת ריקה בכל פעולה שאינה
+  משתמשת בהם."""
 
 
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{queries.SCHEMA_DOC}"
