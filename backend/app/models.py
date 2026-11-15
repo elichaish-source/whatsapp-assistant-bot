@@ -185,6 +185,12 @@ class BotMessage(Base):
     # השאילתה שהמודל כתב, כפי שנכתבה. נשמרת תמיד — גם כשנדחתה וגם
     # כשנכשלה — כי זאת הדרך היחידה לראות אחר כך מה הבוט באמת ביקש לדעת
     query_sql: Mapped[str | None] = mapped_column(Text)
+    # מצב המשימה לפני שהבוט שינה אותה, כ-JSON. כך "בטל" מחזיר שינוי במשימה
+    # קיימת, ולא רק מוחק משימה חדשה
+    undo_json: Mapped[str | None] = mapped_column(Text)
+    # פעולה שהבוט שאל עליה ומחכה ל"כן", כ-JSON. ⚠️ האישור נאכף כאן ולא
+    # במודל: "כן" מבצע רק את מה שרשום בהודעה הקודמת
+    pending_json: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     cached_tokens: Mapped[int | None] = mapped_column(Integer)
