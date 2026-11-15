@@ -217,15 +217,18 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
     if not intent.title:
         return Outcome("לא הבנתי מה המשימה. אפשר לנסח שוב?")
 
+    due = _parse_due(intent.due_date)
+    # בלי מסגרת זמן מפורשת התאריך קובע אותה, ובלי תאריך — השבוע
+    by_date = timeframe.for_due(due, timeframe.local_today()) if due else "week"
     body = TaskIn(
         title=intent.title[:500],
         domain_id=intent.domain_id,
         task_type_id=intent.task_type_id,
         client_id=intent.client_id,
         project_id=intent.project_id,
-        due_date=_parse_due(intent.due_date),
+        due_date=due,
         reminder_at=_parse_reminder(intent.reminder_at),
-        priority=intent.priority or "week",
+        priority=intent.priority or by_date,
         notes=intent.notes,
     )
     try:
@@ -534,11 +537,14 @@ def _update_task(db: Session, intent: Intent) -> Outcome:
     if intent.priority:
         if intent.priority != task.priority:
             timeframe.set_priority(task, intent.priority)
-    elif due and due > today and task.priority in ("today", "tomorrow"):
-        # ‏⚠️ "להיום" כולל כל מה שמתויג היום. משימה שנדחתה לתאריך עתידי
-        # והתיוג נשאר עליה הייתה ממשיכה להופיע ברשימת היום — כלומר
-        # "תדחה" לא היה דוחה כלום. לכן הדחייה מורידה את התיוג לשבוע
-        timeframe.set_priority(task, "week")
+    elif due and before["due_date"] != due.isoformat():
+        # ‏⚠️ תאריך חדש קובע את מסגרת הזמן, לשני הכיוונים: עד שבוע קדימה —
+        # השבוע, מעבר לזה — בהמשך. בלי זה משימה מתויגת "היום" שנדחתה הייתה
+        # נשארת ברשימת היום, כלומר "תדחה" לא היה דוחה כלום. מכאן והלאה
+        # timeframe.roll_due מקדם אותה חזרה ככל שהתאריך מתקרב
+        target = timeframe.for_due(due, today)
+        if target != task.priority:
+            timeframe.set_priority(task, target)
 
     after = _snapshot(task)
     changed = [field for field in _UNDO_FIELDS if before[field] != after[field]]
@@ -890,6 +896,11 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
 
     due = _parse_due(intent.due_date)
     if due:
+        if due != task.due_date and not intent.priority:
+            # אותו כלל כמו ב-update_task: תאריך חדש קובע את מסגרת הזמן
+            target = timeframe.for_due(due, timeframe.local_today())
+            if target != task.priority:
+                timeframe.set_priority(task, target)
         task.due_date = due
         changed = True
     reminder = _parse_reminder(intent.reminder_at)

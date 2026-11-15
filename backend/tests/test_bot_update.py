@@ -182,6 +182,65 @@ def test_postponing_takes_the_task_off_todays_list(db, say):
     assert "ביטוח" not in listed.reply
 
 
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [(1, "tomorrow"), (2, "week"), (7, "week"), (8, "later"), (40, "later")],
+)
+def test_a_new_date_sets_the_timeframe(db, say, days, expected):
+    """התאריך החדש קובע: מחר, עד שבוע קדימה — השבוע, מעבר לזה — בהמשך."""
+    task = new_task(db, "לחדש את הביטוח", priority="today", due_date=today())
+    due = (today() + timedelta(days=days)).isoformat()
+    say(Intent(action="update_task", task_text="ביטוח", due_date=due))
+    db.refresh(task)
+    assert task.priority == expected
+    assert task.priority_set_on == today()
+
+
+def test_pulling_a_date_closer_raises_the_timeframe(db, say):
+    """הכלל עובד לשני הכיוונים, לא רק בדחייה."""
+    task = new_task(db, "לחדש את הביטוח", priority="later", due_date=today() + timedelta(days=30))
+    say(Intent(action="update_task", task_text="ביטוח", due_date=today().isoformat()))
+    db.refresh(task)
+    assert task.priority == "today"
+
+
+def test_the_same_date_again_does_not_touch_the_timeframe(db, say):
+    """תאריך שלא השתנה אינו סיבה לדרוס תיוג שהמשתמש קבע ביד."""
+    due = today() + timedelta(days=30)
+    task = new_task(db, "לחדש את הביטוח", priority="today", due_date=due)
+    say(Intent(action="update_task", task_text="ביטוח", due_date=due.isoformat(), notes="לבדוק מחיר"))
+    db.refresh(task)
+    assert task.priority == "today"
+
+
+def test_a_new_task_gets_its_timeframe_from_its_date(db, say):
+    say(Intent(action="add_task", title="להגיש דוח שנתי", due_date=(today() + timedelta(days=30)).isoformat()))
+    say(Intent(action="add_task", title="לשלם ארנונה", due_date=(today() + timedelta(days=3)).isoformat()))
+    say(Intent(action="add_task", title="בלי תאריך"))
+    say(
+        Intent(
+            action="add_task",
+            title="דחוף עם תאריך רחוק",
+            due_date=(today() + timedelta(days=30)).isoformat(),
+            priority="today",
+        )
+    )
+    found = {task.title: task.priority for task in db.scalars(select(Task)).all()}
+    assert found == {
+        "להגיש דוח שנתי": "later",
+        "לשלם ארנונה": "week",
+        "בלי תאריך": "week",
+        "דחוף עם תאריך רחוק": "today",
+    }
+
+
+def test_fixing_the_date_of_the_last_task_sets_its_timeframe(db, say):
+    say(Intent(action="add_task", title="להגיש דוח שנתי"))
+    say(Intent(action="update_last", due_date=(today() + timedelta(days=30)).isoformat()))
+    task = db.scalars(select(Task)).one()
+    assert task.priority == "later"
+
+
 def test_an_explicit_timeframe_wins_over_the_postponing_rule(db, say):
     task = new_task(db, "לחדש את הביטוח", priority="today")
     say(
@@ -193,7 +252,7 @@ def test_an_explicit_timeframe_wins_over_the_postponing_rule(db, say):
     assert task.priority == "today"
 
 
-def test_a_date_that_is_not_in_the_future_keeps_the_timeframe(db, say):
+def test_a_date_of_today_keeps_the_task_on_today(db, say):
     task = new_task(db, "לחדש את הביטוח", priority="today")
     say(Intent(action="update_task", task_text="ביטוח", due_date=today().isoformat()))
     db.refresh(task)

@@ -1,4 +1,4 @@
-"""מסגרת הזמן של משימה, וההתגלגלות של "מחר" ל"היום".
+"""מסגרת הזמן של משימה: ההתגלגלות של "מחר" ל"היום", וההתקדמות לפי תאריך היעד.
 
 מסגרת הזמן היא תג ולא תאריך, ובדיוק בגלל זה "מחר" חייב להתגלגל: בלי זה
 משימה שתויגה "מחר" לפני שבוע תמשיך להציג "מחר" לנצח. priority_set_on
@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, select
@@ -71,3 +71,69 @@ def roll_tomorrow(db: Session, today: date) -> int:
         )
 
     return len(rows)
+
+
+# כמה ימים קדימה נחשבים "השבוע". שבעה ימים מהיום ולא סוף השבוע בלוח: כך
+# משימה אף פעם לא יושבת ב"בהמשך" בימים האחרונים שלפני התאריך שלה
+WEEK_DAYS = 7
+
+# סדר הדחיפות. ההתקדמות האוטומטית זזה רק לכיוון הדחוף יותר
+_RANK = {"today": 0, "tomorrow": 1, "week": 2, "later": 3}
+
+
+def for_due(due: date, today: date) -> str:
+    """מסגרת הזמן שנובעת מתאריך היעד.
+
+    הגיע או עבר — היום. מחר — מחר. עד שבוע קדימה — השבוע. מעבר לזה — בהמשך.
+    """
+    days = (due - today).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    if days <= WEEK_DAYS:
+        return "week"
+    return "later"
+
+
+def roll_due(db: Session, today: date) -> int:
+    """מקדם משימות פתוחות ככל שתאריך היעד שלהן מתקרב.
+
+    "בהמשך" הופך ל"השבוע" כשהתאריך נכנס לטווח של שבוע, ל"מחר" יום לפני,
+    ול"היום" כשהוא מגיע. ‏⚠️ רק לכיוון הדחוף יותר: משימה שתויגה "היום" ויש
+    לה תאריך רחוק לא מורדת, כי התיוג הזה הוא החלטה של המשתמש.
+
+    כמו ב-roll_tomorrow, תיוג שנקבע היום לא זז. בלי זה כפתור התיוג בדשבורד
+    היה נראה שבור: לוחצים "בהמשך" על משימה שהתאריך שלה מחר, ותוך דקה היא
+    חוזרת ל"מחר". התיוג מחזיק עד סוף היום, ולמחרת התאריך שוב קובע.
+    """
+    rows = db.scalars(
+        select(Task).where(
+            Task.status == "open",
+            Task.due_date.is_not(None),
+            Task.due_date <= today + timedelta(days=WEEK_DAYS),
+            Task.priority != "today",
+            or_(Task.priority_set_on.is_(None), Task.priority_set_on < today),
+        )
+    ).all()
+
+    moved: list[tuple[Task, str, str]] = []
+    for task in rows:
+        target = for_due(task.due_date, today)
+        if _RANK[target] < _RANK.get(task.priority, len(_RANK)):
+            moved.append((task, task.priority, target))
+            set_priority(task, target, today)
+    if not moved:
+        return 0
+    db.commit()
+
+    for task, before, after in moved:
+        memory.observe(
+            "task_reprioritized",
+            "system",
+            task_id=task.id,
+            client_id=task.client_id,
+            detail=f"{task.title} · priority: {before} → {after} (לפי תאריך היעד)",
+        )
+
+    return len(moved)
