@@ -34,7 +34,7 @@ def _get(db: Session, project_id: int) -> Project:
     return project
 
 
-def _apply(db: Session, project: Project, body: ProjectIn) -> Project:
+def save_project(db: Session, project: Project, body: ProjectIn) -> Project:
     if not db.get(Domain, body.domain_id):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "תחום לא קיים")
     if body.client_id is not None and not db.get(Client, body.client_id):
@@ -78,12 +78,12 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("", response_model=ProjectOut, status_code=201)
 def create_project(body: ProjectIn, db: Session = Depends(get_db)):
-    return _out(_apply(db, Project(), body), 0)
+    return _out(save_project(db, Project(), body), 0)
 
 
 @router.put("/{project_id}", response_model=ProjectOut)
 def update_project(project_id: int, body: ProjectIn, db: Session = Depends(get_db)):
-    project = _apply(db, _get(db, project_id), body)
+    project = save_project(db, _get(db, project_id), body)
     return _out(project, _open_tasks(db, [project.id]).get(project.id, 0))
 
 

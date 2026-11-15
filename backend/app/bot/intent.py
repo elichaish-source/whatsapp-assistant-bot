@@ -34,6 +34,10 @@ Action = Literal[
     "delete_task",
     "confirm",
     "decline",
+    "add_client",
+    "update_client",
+    "add_project",
+    "update_project",
     "remember",
     "clarify",
     "unknown",
@@ -68,6 +72,15 @@ class Intent(BaseModel):
     task_text: str | None = None
     # list_tasks
     list_filter: Literal["open", "today", "overdue", "client", "project"] | None = None
+    # add_client, update_client, add_project, update_project. מחרוזת ריקה, 0
+    # ו-"" ולא null, בגלל מגבלת האיחודים בסכימה שלמטה
+    name: str = ""
+    phone: str = ""
+    email: str = ""
+    tax_id: str = ""
+    address: str = ""
+    family_id: int = 0
+    active: Literal["", "yes", "no"] = ""
     # clarify
     question: str | None = None
 
@@ -127,6 +140,10 @@ INTENT_SCHEMA: dict = {
                 "delete_task",
                 "confirm",
                 "decline",
+                "add_client",
+                "update_client",
+                "add_project",
+                "update_project",
                 "remember",
                 "clarify",
                 "unknown",
@@ -151,6 +168,13 @@ INTENT_SCHEMA: dict = {
         "task_text": _nullable("string"),
         "list_filter": _nullable_enum(["open", "today", "overdue", "client", "project"]),
         "question": _nullable("string"),
+        "name": {"type": "string"},
+        "phone": {"type": "string"},
+        "email": {"type": "string"},
+        "tax_id": {"type": "string"},
+        "address": {"type": "string"},
+        "family_id": {"type": "integer"},
+        "active": {"type": "string", "enum": ["", "yes", "no"]},
     },
     "required": [
         "action",
@@ -173,6 +197,13 @@ INTENT_SCHEMA: dict = {
         "task_text",
         "list_filter",
         "question",
+        "name",
+        "phone",
+        "email",
+        "tax_id",
+        "address",
+        "family_id",
+        "active",
     ],
 }
 
@@ -209,9 +240,31 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - delete_task: המשתמש רוצה למחוק משימה קיימת שהוא מציין. "תמחק את המשימה על
   הביטוח", "תמחק את 2". זה לא "בטל": "בטל" לבד הוא cancel_last.
 - confirm: המשתמש עונה בחיוב לשאלת אישור — ההודעה האחרונה שלך ב"השיחה עד
-  עכשיו" שאלה אם לבצע משהו ("למחוק...?"), והוא ענה "כן", "אשר", "תמחק".
+  עכשיו" שאלה אם לבצע משהו ("למחוק...?", "ליצור בכל זאת...?"), והוא ענה
+  "כן", "אשר", "תמחק", "תיצור".
   בלי שאלת אישור כזאת לפניו, "כן" אינו confirm.
 - decline: אותו מצב, והמשתמש ענה בשלילה: "לא", "עזוב", "אל תמחק".
+- add_client: המשתמש מבקש במפורש לפתוח לקוח חדש. "לקוח חדש: משה כהן",
+  "תוסיף לקוח בשם...", "תפתח לקוח...". ב-name שם הלקוח כפי שנאמר. מלא phone,
+  email, tax_id (ח.פ, עוסק מורשה או ת"ז), address ו-notes רק אם נאמרו.
+  ב-family_id מזהה מהרשימה "משפחות לקוחות" רק אם המשתמש אמר לאיזו משפחה
+  הלקוח שייך, ואחרת 0. ⚠️ שם של אדם בתוך משימה ("להתקשר למשה") אינו בקשה
+  לפתוח לקוח.
+- update_client: המשתמש משנה פרטים של לקוח קיים. "הטלפון של דני הוא...",
+  "תוסיף לדני מייל...", "דני כבר לא לקוח", "תחזיר את דני ללקוחות הפעילים".
+  ב-client_id המזהה מהרשימות — לקוחות פעילים או לא פעילים. מלא רק את מה
+  שמשתנה. name רק אם המשתמש ביקש לשנות את שם הלקוח עצמו. active הוא "no"
+  כשהלקוח מפסיק להיות פעיל, "yes" כשהוא חוזר, ואחרת "". notes היא הערה
+  להוסיף ללקוח.
+- add_project: המשתמש מבקש במפורש לפתוח פרויקט. "פרויקט חדש לדני: הקמת
+  אתר", "תפתח פרויקט...". ב-name שם הפרויקט, ב-client_id הלקוח אם הפרויקט
+  שלו. ב-domain_id התחום המתאים ביותר מהרשימה: פרויקט חייב תחום, ולכן בחר
+  גם כשהמשתמש לא אמר; רק אם באמת אי אפשר לדעת השאר null, והשרת ישאל.
+  due_date אם נאמר תאריך יעד, ו-notes אם נאמר תיאור.
+- update_project: המשתמש משנה פרויקט קיים. "סגור את פרויקט האתר", "פרויקט
+  האתר עד סוף ינואר", "תעביר את פרויקט האתר לתחום שיווק". ב-project_id
+  המזהה מהרשימה, ורק מה שמשתנה. active הוא "no" כשהפרויקט הסתיים או נסגר,
+  ואחרת "". name רק אם המשתמש ביקש לשנות את שם הפרויקט.
 - remember: המשתמש מבקש לזכור משהו לטווח ארוך, ולא לבצע משימה. "תזכור ש...",
   "שים לב שתמיד...", "מעכשיו...". ב-fact כתוב מה שהמשתמש אמר ולא יותר: משפט
   אחד בגוף ראשון, שיהיה מובן גם בעוד חצי שנה. ⚠️ אל תוסיף מסקנה, כלל או הוראה
@@ -270,9 +323,20 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   כשהמשתמש נקב במספר מהרשימה, ואחרת task_text — מילה או שתיים מתוך כותרת
   המשימה כפי שהמשתמש אמר אותן, בלי "את", בלי ה"א הידיעה ובלי מילות הזמן.
   "תדחה את הביטוח לשבוע הבא" הוא task_text "ביטוח". אל תנחש כותרת מלאה.
-- כל שדה שאינו רלוונטי לפעולה שבחרת — null. ארבעה שדות הם היוצא מן הכלל,
-  ובהם אין null לעולם: repeat_unit הוא "none" בכל פעולה שאינה add_recurring,
-  ‏repeat_count ו-lead_days הם 0, ו-sql הוא מחרוזת ריקה."""
+- משימה, לקוח או פרויקט? לקוח ופרויקט נפתחים רק כשהמשתמש אמר "לקוח" או
+  "פרויקט" וביקש לפתוח, להוסיף או ליצור. כל השאר — משימה.
+- update_client או remember? פרטי קשר ורישום (טלפון, מייל, ח.פ, כתובת, שם,
+  פעיל או לא) — update_client. עובדה על ההתנהגות או ההעדפות של הלקוח ("דני
+  לא עונה לפני עשר") — remember.
+- ⚠️ אם ב-add_project או ב-update_client הוזכר לקוח שאינו מופיע ברשימות —
+  clarify, ושאל אם לפתוח אותו קודם. אל תיצור פרויקט בלי הלקוח שהמשתמש ציין,
+  ואל תבחר לקוח אחר בשם דומה.
+- הודעה אחת היא פעולה אחת. אם המשתמש ביקש שתיים ("לקוח חדש משה כהן ותזכיר
+  לי להתקשר אליו"), בצע את הראשונה בלבד.
+- כל שדה שאינו רלוונטי לפעולה שבחרת — null. יש שדות שבהם אין null לעולם:
+  repeat_unit הוא "none" בכל פעולה שאינה add_recurring, ‏repeat_count,
+  ‏lead_days ו-family_id הם 0, ו-sql, ‏name, ‏phone, ‏email, ‏tax_id, ‏address
+  ו-active הם מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
 
 
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{queries.SCHEMA_DOC}"
