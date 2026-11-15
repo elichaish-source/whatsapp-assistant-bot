@@ -7,11 +7,12 @@
 
 import re
 from datetime import date, datetime
+from typing import get_args
 
 import pytest
 from sqlalchemy import select
 
-from app import queries
+from app import queries, schemas
 from app.bot import actions
 from app.bot.intent import Intent
 from app.models import Client, Task
@@ -155,6 +156,56 @@ def test_a_long_result_is_cut_and_says_how_many_are_left():
 )
 def test_values_read_like_hebrew_and_not_like_a_database(value, expected):
     assert queries.cell(value) == expected
+
+
+def test_a_single_value_is_an_answer_and_not_a_list_of_one():
+    """⚠️ מהודעה אמיתית: "כמה פתוחות להיום" ענה "(1):" ומתחתיו "1. 13"."""
+    text = queries.render(["open_today"], [(13,)], "משימות פתוחות להיום")
+    assert text == "משימות פתוחות להיום: 13"
+
+
+def test_a_single_row_of_totals_is_one_line_too():
+    text = queries.render(["open", "done"], [(13, 40)], "סיכום")
+    assert text == "סיכום: 13 · 40"
+
+
+def test_a_single_task_stays_numbered_so_it_can_be_closed():
+    """שורה יחידה עם id היא משימה שאפשר לומר עליה "סיימתי 1"."""
+    text = queries.render(["id", "title"], [(7, "לשלם ארנונה")], "פתוח")
+    assert text.splitlines() == ["פתוח (1):", "1. לשלם ארנונה"]
+
+
+def test_stored_values_come_out_in_the_dashboards_hebrew():
+    """⚠️ מהודעה אמיתית: מסגרת הזמן הופיעה כ-today וכ-week."""
+    rows = [(1, "א", "today", "open", "whatsapp"), (2, "ב", "week", "done", "dashboard")]
+    text = queries.render(["id", "title", "priority", "status", "source"], rows, "הכול")
+    assert text.splitlines()[1:] == [
+        "1. א · היום · פתוח · מוואטסאפ",
+        "2. ב · השבוע · הסתיים · מהמערכת",
+    ]
+
+
+def test_a_title_that_looks_like_a_stored_value_is_left_alone():
+    """התרגום הוא לפי שם העמודה. כותרת שהיא במקרה "week" נשארת כותרת."""
+    text = queries.render(["id", "title"], [(1, "week"), (2, "today")], "פתוח")
+    assert text.splitlines()[1:] == ["1. week", "2. today"]
+
+
+def test_an_unknown_value_passes_through():
+    assert queries.cell("someday", "priority") == "someday"
+
+
+def test_every_stored_value_has_a_label():
+    """ערך חדש במודל בלי תווית היה יוצא למשתמש באנגלית, בלי ששום דבר נשבר."""
+    expected = {
+        "priority": schemas.Priority,
+        "source": schemas.TaskSource,
+        "interval_unit": schemas.RepeatUnit,
+    }
+    for column, literal in expected.items():
+        assert set(queries.LABELS[column]) == set(get_args(literal)), column
+    statuses = set(get_args(schemas.TaskStatus)) | set(get_args(schemas.ProjectStatus))
+    assert set(queries.LABELS["status"]) == statuses
 
 
 # --- המספור, ולמי הוא שייך ---
