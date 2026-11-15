@@ -135,6 +135,8 @@ def _tick() -> None:
             # "מחר" שנקבע ביום קודם הוא "היום" מעכשיו. לפני התזכורות, כדי
             # שהמשימה תופיע בתיוג הנכון באותו סבב
             timeframe.roll_tomorrow(db, now_local().date())
+            # ואחריו לפי תאריך היעד: מה שהתקרב עולה מסגרת
+            timeframe.roll_due(db, now_local().date())
         except Exception:  # noqa: BLE001 - תקלה בהתגלגלות לא עוצרת תזכורות
             log.exception("התגלגלות מסגרת הזמן נכשלה")
             db.rollback()

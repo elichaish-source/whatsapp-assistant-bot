@@ -123,3 +123,109 @@ def test_nothing_is_logged_when_nothing_rolls(db):
 
     db.expire_all()
     assert db.scalars(select(Observation)).all() == []
+
+
+# --- התקדמות לפי תאריך היעד ---
+
+
+def test_the_timeframe_that_follows_from_a_date():
+    today = date(2026, 11, 15)
+    assert timeframe.for_due(today - timedelta(days=3), today) == "today"
+    assert timeframe.for_due(today, today) == "today"
+    assert timeframe.for_due(today + timedelta(days=1), today) == "tomorrow"
+    assert timeframe.for_due(today + timedelta(days=2), today) == "week"
+    assert timeframe.for_due(today + timedelta(days=7), today) == "week"
+    assert timeframe.for_due(today + timedelta(days=8), today) == "later"
+
+
+def test_a_postponed_task_climbs_back_as_its_date_gets_close(db):
+    """המסלול המלא: בהמשך → השבוע → מחר → היום, בלי שאף אחד נוגע במשימה."""
+    start = date(2026, 11, 15)
+    due = start + timedelta(days=10)
+    task = _task(db, "לחדש את הביטוח", priority="later", priority_set_on=start, due_date=due)
+
+    seen = {}
+    for offset in range(1, 11):
+        day = start + timedelta(days=offset)
+        timeframe.roll_tomorrow(db, day)
+        timeframe.roll_due(db, day)
+        db.expire_all()
+        seen[offset] = db.get(Task, task.id).priority
+
+    assert seen[2] == "later"
+    assert seen[3] == "week"
+    assert seen[8] == "week"
+    assert seen[9] == "tomorrow"
+    assert seen[10] == "today"
+
+
+def test_the_date_only_ever_raises_the_timeframe(db):
+    """⚠️ "היום" על משימה עם תאריך רחוק הוא החלטה של המשתמש, ולא מורד."""
+    today = date(2026, 11, 15)
+    old = today - timedelta(days=5)
+    urgent = _task(db, "דחוף", priority="today", priority_set_on=old, due_date=today + timedelta(days=30))
+    soon = _task(db, "מחר", priority="tomorrow", priority_set_on=today, due_date=today + timedelta(days=5))
+    far = _task(db, "רחוק", priority="week", priority_set_on=old, due_date=today + timedelta(days=30))
+
+    assert timeframe.roll_due(db, today) == 0
+
+    db.expire_all()
+    assert db.get(Task, urgent.id).priority == "today"
+    assert db.get(Task, soon.id).priority == "tomorrow"
+    assert db.get(Task, far.id).priority == "week"
+
+
+def test_an_overdue_task_moves_to_today(db):
+    today = date(2026, 11, 15)
+    task = _task(
+        db, "באיחור", priority="later", priority_set_on=today - timedelta(days=9),
+        due_date=today - timedelta(days=4),
+    )
+    assert timeframe.roll_due(db, today) == 1
+    db.expire_all()
+    assert db.get(Task, task.id).priority == "today"
+    assert db.get(Task, task.id).priority_set_on == today
+
+
+def test_a_tag_set_today_holds_until_tomorrow(db):
+    """בלי זה כפתור התיוג בדשבורד היה נראה שבור: התאריך היה דורס אותו תוך דקה."""
+    today = date(2026, 11, 15)
+    task = _task(db, "תויג עכשיו", priority="later", priority_set_on=today, due_date=today + timedelta(days=1))
+
+    assert timeframe.roll_due(db, today) == 0
+    db.expire_all()
+    assert db.get(Task, task.id).priority == "later"
+
+    assert timeframe.roll_due(db, today + timedelta(days=1)) == 1
+    db.expire_all()
+    assert db.get(Task, task.id).priority == "today"
+
+
+def test_tasks_without_a_date_and_closed_tasks_are_left_alone(db):
+    today = date(2026, 11, 15)
+    old = today - timedelta(days=5)
+    no_date = _task(db, "בלי תאריך", priority="later", priority_set_on=old)
+    done = _task(db, "בוצעה", priority="later", priority_set_on=old, due_date=today, status="done")
+
+    assert timeframe.roll_due(db, today) == 0
+    db.expire_all()
+    assert db.get(Task, no_date.id).priority == "later"
+    assert db.get(Task, done.id).priority == "later"
+
+
+def test_the_climb_is_written_to_the_journal(db):
+    today = date(2026, 11, 15)
+    task = _task(
+        db, "לחדש את הביטוח", priority="later", priority_set_on=today - timedelta(days=5),
+        due_date=today + timedelta(days=4),
+    )
+    assert timeframe.roll_due(db, today) == 1
+
+    db.expire_all()
+    rows = db.scalars(
+        select(Observation).where(Observation.task_id == task.id, Observation.kind == "task_reprioritized")
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].source == "system"
+    assert "later → week" in rows[0].detail
+    assert "לפי תאריך היעד" in rows[0].detail

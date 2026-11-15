@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -26,6 +27,8 @@ log = logging.getLogger(__name__)
 
 # כמה זמן אחרי השמירה עוד אפשר לכתוב "בטל"
 CANCEL_WINDOW = timedelta(hours=2)
+# כמה זמן אחרי ששאלתי "למחוק?" התשובה "כן" עוד תקפה
+CONFIRM_WINDOW = timedelta(minutes=15)
 LIST_LIMIT = 15
 
 # כמה מההתכתבות הקודמת נשלחת למודל. החלון קצר בכוונה: ארוך מספיק כדי
@@ -170,8 +173,14 @@ class Outcome:
         query_sql: str | None = None,
         query_error: str | None = None,
         clear_list: bool = False,
+        undo: dict | None = None,
+        pending: dict | None = None,
     ) -> None:
         self.reply = reply
+        # המצב שלפני השינוי, כדי ש"בטל" יחזיר אותו
+        self.undo = undo
+        # פעולה שמחכה ל"כן" בהודעה הבאה. לא בוצעה עדיין
+        self.pending = pending
         self.task_id = task_id
         self.listed_task_ids = listed_task_ids or []
         self.fact_id = fact_id
@@ -208,15 +217,18 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
     if not intent.title:
         return Outcome("לא הבנתי מה המשימה. אפשר לנסח שוב?")
 
+    due = _parse_due(intent.due_date)
+    # בלי מסגרת זמן מפורשת התאריך קובע אותה, ובלי תאריך — השבוע
+    by_date = timeframe.for_due(due, timeframe.local_today()) if due else "week"
     body = TaskIn(
         title=intent.title[:500],
         domain_id=intent.domain_id,
         task_type_id=intent.task_type_id,
         client_id=intent.client_id,
         project_id=intent.project_id,
-        due_date=_parse_due(intent.due_date),
+        due_date=due,
         reminder_at=_parse_reminder(intent.reminder_at),
-        priority=intent.priority or "week",
+        priority=intent.priority or by_date,
         notes=intent.notes,
     )
     try:
@@ -336,17 +348,12 @@ def _complete_task(db: Session, intent: Intent) -> Outcome:
             return Outcome("לא מצאתי משימה במספר הזה. אפשר לבקש \"רשימה\" ולנסות שוב.")
 
     if task is None and intent.task_text:
-        matches = db.scalars(
-            select(Task)
-            .where(Task.status == "open", Task.title.ilike(f"%{intent.task_text.strip()}%"))
-            .order_by(Task.id.desc())
-            .limit(5)
-        ).all()
+        matches = _find_open(db, intent.task_text)
         if not matches:
             return Outcome(f'לא מצאתי משימה פתוחה שמתאימה ל"{intent.task_text}".')
         if len(matches) > 1:
             return Outcome(
-                "יש כמה משימות שמתאימות. לאיזו התכוונת?\n" + _format_list(db, list(matches)),
+                "יש כמה משימות שמתאימות. לאיזו התכוונת?\n" + _format_list(db, matches),
                 listed_task_ids=[item.id for item in matches],
             )
         task = matches[0]
@@ -365,13 +372,284 @@ def _complete_task(db: Session, intent: Intent) -> Outcome:
     return Outcome(f"סומן כבוצע: {task.title}", task_id=task.id)
 
 
+# --- איתור משימה קיימת ---
+
+# אותיות שימוש שנדבקות לראש מילה בעברית. "הביטוח" צריך למצוא "ביטוח"
+_PREFIXES = "הלבומשכ"
+
+
+def _words(text: str, strip_prefix: bool = False) -> list[str]:
+    words = [word for word in text.split() if word != "את"]
+    if strip_prefix:
+        words = [w[1:] if len(w) > 3 and w[0] in _PREFIXES else w for w in words]
+    return words
+
+
+def _like(word: str) -> str:
+    escaped = word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _find_open(db: Session, text: str) -> list[Task]:
+    """משימות פתוחות שכל מילות החיפוש מופיעות בכותרת שלהן.
+
+    מילה-מילה ולא כמחרוזת אחת, כי המשתמש לא מצטט את הכותרת: "הדוח של טיפ
+    טופ" צריך למצוא "לטפל בדוח של טיפ טופ". כשאין התאמה יש ניסיון שני,
+    בלי אות השימוש שבראש כל מילה. מילה מקוצרת היא תמיד חלק מהמילה המלאה,
+    ולכן הניסיון השני רק מרחיב ואף פעם לא מפספס את מה שהראשון מצא.
+    """
+    for strip in (False, True):
+        words = _words(text, strip)
+        if not words:
+            return []
+        stmt = select(Task).where(Task.status == "open")
+        for word in words:
+            stmt = stmt.where(Task.title.ilike(_like(word), escape="\\"))
+        found = db.scalars(stmt.order_by(Task.id.desc()).limit(5)).all()
+        if found:
+            return list(found)
+    return []
+
+
+def _locate(db: Session, intent: Intent) -> Task | Outcome:
+    """המשימה הפתוחה שהמשתמש התכוון אליה, או תשובה שמסבירה למה אין אחת.
+
+    ‏⚠️ לא בוחר לבד מבין כמה התאמות. שינוי שקט במשימה הלא נכונה הוא בדיוק
+    הסוג שלא שמים לב אליו, ולכן כמה התאמות מוצגות ונשאלת שאלה.
+    """
+    if intent.task_number:
+        task = _resolve_by_number(db, intent.task_number)
+        if task is None:
+            return Outcome('לא מצאתי משימה במספר הזה. אפשר לבקש "רשימה" ולנסות שוב.')
+        if task.status != "open":
+            return Outcome(f"המשימה הזאת כבר סגורה: {task.title}")
+        return task
+
+    if intent.task_text:
+        matches = _find_open(db, intent.task_text)
+        if not matches:
+            return Outcome(f'לא מצאתי משימה פתוחה שמתאימה ל"{intent.task_text}".')
+        if len(matches) > 1:
+            return Outcome(
+                "יש כמה משימות שמתאימות. לאיזו התכוונת?\n" + _format_list(db, matches),
+                listed_task_ids=[item.id for item in matches],
+            )
+        return matches[0]
+
+    return Outcome("לא הבנתי לאיזו משימה התכוונת.")
+
+
+# --- עדכון משימה קיימת ---
+
+# כל מה שעדכון יכול לשנות, ולכן כל מה שנשמר כדי ש"בטל" יוכל להחזיר
+_UNDO_FIELDS = (
+    "title",
+    "domain_id",
+    "task_type_id",
+    "client_id",
+    "project_id",
+    "due_date",
+    "reminder_at",
+    "reminder_sent_at",
+    "priority",
+    "priority_set_on",
+    "notes",
+)
+_UNDO_DATES = ("due_date", "priority_set_on")
+_UNDO_TIMES = ("reminder_at", "reminder_sent_at")
+
+
+def _snapshot(task: Task) -> dict:
+    """מצב המשימה כמילון שאפשר לשמור כ-JSON."""
+    data: dict = {}
+    for field in _UNDO_FIELDS:
+        value = getattr(task, field)
+        data[field] = value.isoformat() if isinstance(value, (date, datetime)) else value
+    return data
+
+
+def _restore(task: Task, data: dict) -> None:
+    for field in _UNDO_FIELDS:
+        if field not in data:
+            continue
+        value = data[field]
+        if value is not None and field in _UNDO_DATES:
+            value = date.fromisoformat(value)
+        elif value is not None and field in _UNDO_TIMES:
+            value = datetime.fromisoformat(value)
+        setattr(task, field, value)
+
+
+def _update_task(db: Session, intent: Intent) -> Outcome:
+    """משנה משימה פתוחה שהמשתמש ציין: "תדחה את הביטוח לשבוע הבא".
+
+    בניגוד ל-update_last, חל על כל משימה פתוחה — גם כזאת שנוצרה בדשבורד,
+    וגם אחרי שעתיים. לכן המצב הקודם נשמר, ו"בטל" מחזיר אותו.
+
+    כללי השיוך הם אלה של הדשבורד (resolve_task_fields), כך שהבוט לא יכול
+    להשאיר משימה במצב שהדשבורד עצמו לא היה מרשה. כמו ב-update_last, אי
+    אפשר לנקות שדה: null פירושו "לא הוזכר".
+    """
+    found = _locate(db, intent)
+    if isinstance(found, Outcome):
+        return found
+    task = found
+    before = _snapshot(task)
+
+    def pick(field: str) -> int | None:
+        value = getattr(intent, field)
+        return value if value is not None else getattr(task, field)
+
+    client_id = pick("client_id")
+    if intent.project_id is not None and intent.client_id is None:
+        # פרויקט של לקוח מושך את המשימה ללקוח שלו. בלי זה "תעביר לפרויקט X"
+        # היה נכשל בכל פעם שהמשימה כבר משויכת ללקוח אחר
+        project = db.get(Project, intent.project_id)
+        if project is not None and project.client_id is not None:
+            client_id = project.client_id
+
+    due = _parse_due(intent.due_date)
+    reminder = _parse_reminder(intent.reminder_at)
+    body = TaskIn(
+        title=(intent.title or task.title)[:500],
+        domain_id=pick("domain_id"),
+        task_type_id=pick("task_type_id"),
+        client_id=client_id,
+        project_id=pick("project_id"),
+        due_date=due or task.due_date,
+        reminder_at=task.reminder_at,
+        priority=task.priority,
+        notes=intent.notes or task.notes,
+    )
+    try:
+        data = resolve_task_fields(db, body)
+    except HTTPException as exc:
+        return Outcome(f"לא עדכנתי: {exc.detail}")
+
+    for field in ("title", "domain_id", "task_type_id", "client_id", "project_id", "due_date", "notes"):
+        setattr(task, field, data[field])
+    if reminder:
+        task.reminder_at = reminder
+        # תזכורת חדשה צריכה לצאת גם אם הקודמת כבר נשלחה
+        task.reminder_sent_at = None
+
+    today = timeframe.local_today()
+    if intent.priority:
+        if intent.priority != task.priority:
+            timeframe.set_priority(task, intent.priority)
+    elif due and before["due_date"] != due.isoformat():
+        # ‏⚠️ תאריך חדש קובע את מסגרת הזמן, לשני הכיוונים: עד שבוע קדימה —
+        # השבוע, מעבר לזה — בהמשך. בלי זה משימה מתויגת "היום" שנדחתה הייתה
+        # נשארת ברשימת היום, כלומר "תדחה" לא היה דוחה כלום. מכאן והלאה
+        # timeframe.roll_due מקדם אותה חזרה ככל שהתאריך מתקרב
+        target = timeframe.for_due(due, today)
+        if target != task.priority:
+            timeframe.set_priority(task, target)
+
+    after = _snapshot(task)
+    changed = [field for field in _UNDO_FIELDS if before[field] != after[field]]
+    if not changed:
+        db.rollback()
+        return Outcome("לא הבנתי מה לשנות במשימה.")
+
+    db.commit()
+    db.refresh(task)
+    memory.observe(
+        "task_updated",
+        "bot",
+        task_id=task.id,
+        client_id=task.client_id,
+        detail=task.title
+        + " · "
+        + ", ".join(f"{field}: {before[field]} → {after[field]}" for field in changed),
+    )
+    detail = describe(db, task)
+    reply = f"עודכן: {task.title}" + (f"\n{detail}" if detail else "")
+    return Outcome(
+        reply + '\nלביטול כתוב "בטל".',
+        task_id=task.id,
+        undo={"task_id": task.id, "before": before},
+    )
+
+
+# --- מחיקה, ואישור שנאכף כאן ---
+
+
+def _delete_task(db: Session, intent: Intent) -> Outcome:
+    """לא מוחק. שואל, ורושם מה מחכה לתשובה.
+
+    המחיקה עצמה קורית ב-_confirm, ורק אם ההודעה הבאה של המשתמש היא אישור.
+    """
+    found = _locate(db, intent)
+    if isinstance(found, Outcome):
+        return found
+    task = found
+    detail = describe(db, task)
+    return Outcome(
+        f"למחוק את המשימה: {task.title}"
+        + (f" ({detail})" if detail else "")
+        + '?\nכתוב "כן" למחיקה. כל תשובה אחרת משאירה אותה.',
+        pending={"kind": "delete_task", "task_id": task.id},
+    )
+
+
+def _pending(db: Session, before_id: int | None) -> tuple[dict | None, str]:
+    """הפעולה שמחכה לאישור, או הסבר למה אין כזאת.
+
+    ‏⚠️ רק ההודעה שמיד לפני הנוכחית נחשבת. כל הודעה אחרת באמצע מבטלת את
+    ההמתנה, כך ש"כן" שנאמר שעה אחר כך, על משהו אחר, לא מוחק כלום. המודל
+    רק מזהה שהמשתמש אישר; מה שאושר נקרא מכאן ולא ממנו.
+    """
+    stmt = select(BotMessage).order_by(BotMessage.id.desc()).limit(1)
+    if before_id is not None:
+        stmt = stmt.where(BotMessage.id < before_id)
+    row = db.scalars(stmt).first()
+    if not row or not row.pending_json:
+        return None, "אין פעולה שמחכה לאישור."
+    if row.created_at and now() - aware(row.created_at) > CONFIRM_WINDOW:
+        return None, "עבר יותר מדי זמן מאז ששאלתי. אפשר לבקש שוב."
+    try:
+        pending = json.loads(row.pending_json)
+    except ValueError:
+        return None, "אין פעולה שמחכה לאישור."
+    return pending, ""
+
+
+def _confirm(db: Session, before_id: int | None) -> Outcome:
+    pending, reason = _pending(db, before_id)
+    if pending is None:
+        return Outcome(reason)
+
+    if pending.get("kind") == "delete_task":
+        task = db.get(Task, pending.get("task_id"))
+        if not task:
+            return Outcome("המשימה כבר לא קיימת.")
+        title, client_id = task.title, task.client_id
+        db.delete(task)
+        db.commit()
+        memory.observe("task_deleted", "bot", client_id=client_id, detail=title)
+        return Outcome(f"נמחק: {title}", clear_list=True)
+
+    return Outcome("אין פעולה שמחכה לאישור.")
+
+
+def _decline(db: Session, before_id: int | None) -> Outcome:
+    pending, _ = _pending(db, before_id)
+    if pending is None:
+        return Outcome("בסדר.")
+    return Outcome("בסדר, לא נגעתי.")
+
+
 def _list_tasks(db: Session, intent: Intent) -> Outcome:
     stmt = select(Task).where(Task.status == "open")
     heading = "המשימות הפתוחות"
     today = now_local().date()
 
     if intent.list_filter == "today":
-        stmt = stmt.where(Task.due_date <= today)
+        # ההגדרה האחת של "להיום", זהה למה שהמודל מקבל בהנחיה לשאילתות:
+        # מתויג היום, או שהתאריך הגיע או עבר. עד 15.11.2026 הרשימה הזאת
+        # הסתכלה רק על התאריך, ומשימה שתויגה "היום" בלי תאריך לא הופיעה
+        stmt = stmt.where(or_(Task.priority == "today", Task.due_date <= today))
         heading = "להיום"
     elif intent.list_filter == "overdue":
         stmt = stmt.where(Task.due_date < today)
@@ -443,7 +721,7 @@ def _last_bot_task_row(db: Session) -> BotMessage | None:
 
 
 # מה ש"בטל" יודע לבטל: משימה שנוצרה, תיקון שלה, או עובדה שנרשמה בזיכרון
-_UNDOABLE = ("add_task", "add_recurring", "update_last", "remember")
+_UNDOABLE = ("add_task", "add_recurring", "update_last", "update_task", "remember")
 
 
 def _last_bot_action_row(db: Session) -> BotMessage | None:
@@ -507,6 +785,23 @@ def _cancel_last(db: Session) -> Outcome:
     task = db.get(Task, row.task_id)
     if not task:
         return Outcome("המשימה כבר לא קיימת.")
+
+    if row.intent == "update_task":
+        # ‏⚠️ חייב לבוא לפני המחיקה שלמטה. שינוי במשימה קיימת מבטלים
+        # בהחזרת המצב הקודם; המחיקה שייכת רק למשימה שהבוט עצמו יצר
+        if not row.undo_json:
+            return Outcome("השינוי הזה כבר בוטל.")
+        _restore(task, json.loads(row.undo_json).get("before", {}))
+        # מרוקן, כדי ש"בטל" שני לא ידרוס שינויים שנעשו מאז
+        row.undo_json = None
+        db.commit()
+        db.refresh(task)
+        memory.observe(
+            "task_update_undone", "bot", task_id=task.id, client_id=task.client_id, detail=task.title
+        )
+        detail = describe(db, task)
+        return Outcome(f"בוטל השינוי: {task.title}" + (f"\n{detail}" if detail else ""))
+
     if task.source != "whatsapp":
         return Outcome("המשימה הזאת לא נוצרה מהבוט, אז לא אבטל אותה.")
 
@@ -601,6 +896,11 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
 
     due = _parse_due(intent.due_date)
     if due:
+        if due != task.due_date and not intent.priority:
+            # אותו כלל כמו ב-update_task: תאריך חדש קובע את מסגרת הזמן
+            target = timeframe.for_due(due, timeframe.local_today())
+            if target != task.priority:
+                timeframe.set_priority(task, target)
         task.due_date = due
         changed = True
     reminder = _parse_reminder(intent.reminder_at)
@@ -622,7 +922,19 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
     return Outcome(f"עודכן: {task.title}" + (f"\n{detail}" if detail else ""), task_id=task.id)
 
 
-def execute(db: Session, intent: Intent) -> Outcome:
+def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcome:
+    """מבצע את הכוונה. ‏before_id הוא מזהה ההודעה הנוכחית ביומן.
+
+    הוא נחוץ רק לאישור ולסירוב, שצריכים לדעת מה נשאל בהודעה שמיד לפני.
+    """
+    if intent.action == "update_task":
+        return _update_task(db, intent)
+    if intent.action == "delete_task":
+        return _delete_task(db, intent)
+    if intent.action == "confirm":
+        return _confirm(db, before_id)
+    if intent.action == "decline":
+        return _decline(db, before_id)
     if intent.action == "add_task":
         return _add_task(db, intent)
     if intent.action == "add_recurring":

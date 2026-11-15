@@ -7,6 +7,7 @@
 
 import hashlib
 import hmac
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
@@ -107,12 +108,16 @@ def handle_message(wa_message_id: str, body: str) -> None:
         row.cached_tokens = result.cached_tokens
         db.commit()
 
-        outcome = actions.execute(db, result.intent)
+        outcome = actions.execute(db, result.intent, row.id)
         row.reply = outcome.reply
         row.task_id = outcome.task_id
         row.fact_id = outcome.fact_id
         row.recurrence_id = outcome.recurrence_id
         row.query_sql = outcome.query_sql
+        row.undo_json = json.dumps(outcome.undo, ensure_ascii=False) if outcome.undo else None
+        row.pending_json = (
+            json.dumps(outcome.pending, ensure_ascii=False) if outcome.pending else None
+        )
         if outcome.listed_task_ids:
             row.listed_task_ids = ",".join(str(item) for item in outcome.listed_task_ids)
         elif outcome.clear_list:
