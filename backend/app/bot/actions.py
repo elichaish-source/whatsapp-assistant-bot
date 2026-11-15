@@ -411,6 +411,10 @@ def _words(text: str, strip_prefix: bool = False) -> list[str]:
 
 def _like(word: str) -> str:
     escaped = word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    # ‏⚠️ מרכאות וגרש מוקלדים בטלפון כ-" ו-' אבל נשמרים לפעמים כ-״ ו-׳
+    # ("מע"מ" מול "מע״מ"). כל אחד מהם הופך לתו כלשהו, כך ששתי הצורות נמצאות
+    for mark in "\"'״׳":
+        escaped = escaped.replace(mark, "_")
     return f"%{escaped}%"
 
 

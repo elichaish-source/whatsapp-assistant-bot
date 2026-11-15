@@ -335,3 +335,24 @@ def test_every_new_action_answers_something(db):
         assert action in INTENT_SCHEMA["properties"]["action"]["enum"]
         assert actions.execute(db, Intent(action=action)).reply
     assert set(lists.CONFIRMABLE) == {"add_domain", "add_task_type"}
+
+
+# --- מרכאות ---
+
+
+def test_a_typed_quote_finds_a_stored_gershayim(db, say):
+    """⚠️ נמצא בבדיקה מול המודל: הוא כותב "המע"מ" במרכאות רגילות, והכותרת
+    שמורה עם ״. בלי ההשוואה הזאת שום התחייבות של מע״מ לא הייתה נמצאת."""
+    rec = recurrence(db, "דוח מע״מ")
+    say(Intent(action="pause_recurrence", task_text='דוח המע"מ'))
+    db.refresh(rec)
+    assert rec.active is False
+
+
+def test_the_same_holds_for_tasks(db, say):
+    task = Task(title="להגיש דוח מע״מ", status="open")
+    db.add(task)
+    db.commit()
+    say(Intent(action="update_task", task_text='מע"מ', priority="today"))
+    db.refresh(task)
+    assert task.priority == "today"
