@@ -308,12 +308,12 @@ def test_delete_only_asks(db, say):
 
 
 def test_yes_right_after_the_question_deletes(db, say):
-    task = new_task(db, "לחדש את הביטוח")
+    # המזהה נשמר מראש: אחרי המחיקה אי אפשר לקרוא אותו מהאובייקט
+    task_id = new_task(db, "לחדש את הביטוח").id
     say(Intent(action="delete_task", task_text="ביטוח"))
     row = say(Intent(action="confirm"))
     assert "נמחק: לחדש את הביטוח" in row.reply
-    db.expire_all()
-    assert db.get(Task, task.id) is None
+    assert db.get(Task, task_id) is None
     assert "task_deleted" in kinds(db)
 
 
@@ -366,14 +366,13 @@ def test_a_second_yes_deletes_nothing_more(db, say):
 def test_the_model_cannot_choose_what_gets_deleted(db, say):
     """⚠️ האישור נאכף בשרת. גם אם המודל מצרף ל"כן" משימה אחרת, נמחקת רק
     זאת שנשאל עליה."""
-    asked = new_task(db, "לחדש את הביטוח")
-    other = new_task(db, "להתקשר לדני")
+    asked_id = new_task(db, "לחדש את הביטוח").id
+    other_id = new_task(db, "להתקשר לדני").id
     say(Intent(action="list_tasks", list_filter="open"))
     say(Intent(action="delete_task", task_text="ביטוח"))
     say(Intent(action="confirm", task_text="דני", task_number=2))
-    db.expire_all()
-    assert db.get(Task, asked.id) is None
-    assert db.get(Task, other.id) is not None
+    assert db.get(Task, asked_id) is None
+    assert db.get(Task, other_id) is not None
 
 
 def test_delete_asks_which_one_when_several_match(db, say):
