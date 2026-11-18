@@ -7,7 +7,7 @@ description: הוספה או שינוי של מפתח בקובץ .env בשרת, 
 
 **הכלל:** סיסמאות, טוקנים ומפתחות לא עוברים בצ'אט. לא בהודעה של המשתמש ולא בפקודה שמודל מריץ. הם נכנסים ישר לקובץ `.env` על השרת.
 
-## שני מצבים
+## שלושה מצבים
 
 ### א. ערך שאפשר לייצר — עושים את זה לבד
 מחרוזות אקראיות (למשל `WAHA_WEBHOOK_HMAC_KEY`, `POSTGRES_PASSWORD`) לא צריכות את המשתמש. מייצרים אותן בשרת, והערך לא עובר בשום מקום:
@@ -23,6 +23,23 @@ ssh -t assistant "bash /root/set-env-key.sh ANTHROPIC_API_KEY"
 ```
 
 הסקריפט מבקש את הערך, לא מציג אותו על המסך, לא שומר אותו בהיסטוריה, ומאשר בסוף רק את **אורך** הערך.
+
+⚠️ **המלכודת של המצב הזה:** ‏`read -s` לא מציג **כלום** בזמן ההקלדה, וזה נראה כמו מסוף תקוע. ב-18.11.2026 כך נכשל בשקט הניסיון להזין את מפתחות גוגל — נלחץ Enter על ריק והתקבל "לא הוזן ערך". **אם הערך קיים כקובץ, עדיף מצב ג.**
+
+### ג. ערך שמגיע בקובץ — שואבים ממנו, בלי הדבקה
+כשהסוד מגיע מהספק כקובץ להורדה (למשל קובץ ה-JSON של לקוח OAuth מ-Google Cloud Console), אין צורך להדביק אותו בכלל. הקובץ עובר ב-`scp`, סקריפט שואב ממנו את הערכים אל `.env` בלי להדפיס אותם, ומוחק אותו בסוף:
+
+```powershell
+scp "<נתיב הסקיל>\set-env-from-google-json.sh" assistant:/root/set-env-from-google-json.sh
+```
+```powershell
+scp "$env:USERPROFILE\Downloads\client_secret_<...>.json" assistant:/root/google-client.json
+```
+```bash
+ssh assistant "sed -i 's/\r$//' /root/set-env-from-google-json.sh && bash /root/set-env-from-google-json.sh /root/google-client.json"
+```
+
+הסקריפט מגדיר `GOOGLE_CLIENT_ID` ו-`GOOGLE_CLIENT_SECRET`, מאשר רק את אורכם, ומוחק את ה-JSON מהשרת. **למחוק אותו גם מתיקיית ההורדות במחשב.** ‏`sed -i 's/\r$//'` נדרש כי קובץ שנשלח מ-Windows עלול להגיע עם סופי שורה של CRLF, ו-bash נשבר עליהם.
 
 ## לפני הכול
 צריך להעלות את הסקריפט פעם אחת:

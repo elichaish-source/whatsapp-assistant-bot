@@ -1,0 +1,190 @@
+<!doctype html>
+<!--
+  דף מדיניות פרטיות סטטי. נדרש על ידי Google Cloud Console בדף Branding
+  כתנאי לפרסום האפליקציה ל-"In production".
+
+  ⚠️ זה קובץ HTML עומד בפני עצמו ולא חלק מהדשבורד ב-React, כדי שהוא
+  יוגש בלי התחברות. ‏Vite מעתיק כל מה שב-public/ אל dist/ כמו שהוא,
+  ו-Caddy ממפה /privacy אל הקובץ הזה.
+
+  ⚠️ הטקסט כאן מתאר את המערכת כפי שהיא באמת. שינוי במה שנשמר במסד,
+  בהרשאות שמבוקשות מגוגל (SCOPES ב-backend/app/gauth.py) או במה שנשלח
+  ל-Claude API — מחייב לעדכן גם את הדף הזה.
+-->
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>מדיניות פרטיות — העוזר שלי</title>
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --text: #1e293b;
+        --muted: #64748b;
+        --accent: #0f766e;
+        --line: #e2e8f0;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #12151b;
+          --card: #1b2029;
+          --text: #e8edf4;
+          --muted: #9aa6b6;
+          --accent: #2dd4bf;
+          --line: #2b323d;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px 16px 64px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, "Segoe UI", Arial, sans-serif;
+        line-height: 1.75;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 28px 24px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 1.6rem;
+        color: var(--accent);
+      }
+      h2 {
+        margin: 32px 0 8px;
+        font-size: 1.12rem;
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+      }
+      h2:first-of-type {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .date {
+        margin: 0 0 24px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      ul {
+        padding-inline-start: 22px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+      code {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.88em;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 1px 5px;
+        direction: ltr;
+        display: inline-block;
+      }
+      a {
+        color: var(--accent);
+      }
+      footer {
+        max-width: 760px;
+        margin: 20px auto 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>מדיניות פרטיות</h1>
+      <p class="date">עודכן ב-18 בנובמבר 2026</p>
+
+      <h2>מה זו האפליקציה</h2>
+      <p>
+        «העוזר שלי» היא אפליקציה פרטית שבניתי לעצמי, למשתמש אחד — אני.
+        היא מנהלת לקוחות, פרויקטים ומשימות, ומופעלת דרך בוט וואטסאפ ודרך
+        דשבורד אישי. היא אינה מוצעת לציבור, אין בה הרשמה, ואין בה משתמשים
+        נוספים. היא רצה על שרת פרטי שבבעלותי בלבד.
+      </p>
+
+      <h2>אילו הרשאות מבוקשות מגוגל, ולמה</h2>
+      <ul>
+        <li>
+          <code>gmail.modify</code> — קריאה של המיילים שלי, ארכוב שלהם ושליחת
+          תשובות בשמי. השליחה קורית רק אחרי שאישרתי במפורש את הנוסח המלא.
+        </li>
+        <li>
+          <code>calendar.events</code> ו-<code>calendar.readonly</code> —
+          קריאה של היומן שלי ויצירה או שינוי של אירועים בו.
+        </li>
+      </ul>
+      <p>
+        ההרשאה <code>https://mail.google.com/</code> <strong>אינה מבוקשת
+        לעולם</strong>. היא ההרשאה היחידה שמאפשרת מחיקה לצמיתות, ובלעדיה
+        האפליקציה אינה מסוגלת למחוק מייל — גם אם תשתבש.
+      </p>
+
+      <h2>מה נשמר בשרת</h2>
+      <ul>
+        <li>טוקן הגישה וטוקן הרענון של גוגל, <strong>מוצפנים</strong>, במפתח שנמצא על השרת ולא בבסיס הנתונים.</li>
+        <li>כתובת תיבת הדואר שחוברה, וההרשאות שגוגל נתנה בפועל.</li>
+        <li>מזהה של מייל, כשנוצרה ממנו משימה — כדי שאפשר יהיה לחזור אליו.</li>
+        <li>המספור של רשימת המיילים האחרונה שהבוט הציג, כדי שאוכל לומר «תראה לי את 2».</li>
+        <li>נקודת הזמן של הסיכום האחרון, כדי שהסיכום הבא יראה רק מה שנכנס מאז.</li>
+        <li>מזהי שרשורים שכבר הוזכרו במעקב «מחכה לתשובה», כדי לא להזכיר אותם פעמיים.</li>
+      </ul>
+
+      <h2>מה לא נשמר</h2>
+      <p>
+        <strong>תוכן המיילים אינו נשמר בשרת.</strong> מייל נקרא מגוגל ברגע
+        שביקשתי אותו, מוצג או מסוכם, ואינו נכתב לבסיס הנתונים — לא הגוף, לא
+        הנושא, לא הנמענים ולא הקבצים המצורפים.
+      </p>
+
+      <h2>למי המידע עובר</h2>
+      <p>
+        תוכן של מייל שנקרא או מסוכם דרך הבוט נשלח ל-<strong>Claude API של
+        Anthropic</strong>, שהוא המודל שמנסח את הסיכום או את התשובה. זהו הגורם
+        החיצוני היחיד שתוכן המיילים מגיע אליו.
+      </p>
+      <p>
+        מעבר לכך המידע אינו מועבר לאף אחד: הוא אינו נמכר, אינו משותף עם גורם
+        שלישי, ואינו משמש לפרסום, לפרופיילינג או לאימון מודלים.
+      </p>
+
+      <h2>אבטחה</h2>
+      <ul>
+        <li>כל התעבורה אל השרת עוברת ב-HTTPS.</li>
+        <li>הטוקנים של גוגל שמורים מוצפנים, והדשבורד דורש התחברות.</li>
+        <li>לבסיס הנתונים ולשרת יש גישה רק לי.</li>
+      </ul>
+
+      <h2>ביטול הגישה ומחיקת המידע</h2>
+      <p>
+        אפשר לנתק את החיבור לגוגל בכל רגע — מתוך הדשבורד, או מדף
+        <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">
+          ההרשאות בחשבון הגוגל</a>.
+        הניתוק מבטל את הטוקן מול גוגל ומוחק אותו מהשרת, והאפליקציה מאבדת כל
+        גישה לדואר וליומן.
+      </p>
+
+      <h2>שינויים</h2>
+      <p>
+        אם יישמר בעתיד מידע נוסף, או אם יתווסף גורם שהמידע עובר אליו, הדף הזה
+        יתעדכן ותאריך העדכון למעלה ישתנה.
+      </p>
+    </main>
+    <footer>
+      <a href="/terms">תנאי שימוש</a> · <a href="/">העוזר שלי</a>
+    </footer>
+  </body>
+</html>
