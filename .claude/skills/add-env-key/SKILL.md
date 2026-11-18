@@ -26,20 +26,28 @@ ssh -t assistant "bash /root/set-env-key.sh ANTHROPIC_API_KEY"
 
 ⚠️ **המלכודת של המצב הזה:** ‏`read -s` לא מציג **כלום** בזמן ההקלדה, וזה נראה כמו מסוף תקוע. ב-18.11.2026 כך נכשל בשקט הניסיון להזין את מפתחות גוגל — נלחץ Enter על ריק והתקבל "לא הוזן ערך". **אם הערך קיים כקובץ, עדיף מצב ג.**
 
-### ג. ערך שמגיע בקובץ — שואבים ממנו, בלי הדבקה
-כשהסוד מגיע מהספק כקובץ להורדה (למשל קובץ ה-JSON של לקוח OAuth מ-Google Cloud Console), אין צורך להדביק אותו בכלל. הקובץ עובר ב-`scp`, סקריפט שואב ממנו את הערכים אל `.env` בלי להדפיס אותם, ומוחק אותו בסוף:
+### ג. ערך שאפשר להעתיק מדף — דרך הלוח, בלי שהמודל רואה אותו
+**זו הדרך שעבדה למפתחות של גוגל ב-18.11.2026.** לוחצים "Copy to clipboard" ליד הערך בדף, ואז שולחים את הלוח ישר לשרת. הערך לא עובר דרך המודל, לא דרך הצ'אט ולא דרך שורת הפקודה:
 
 ```powershell
-scp "<נתיב הסקיל>\set-env-from-google-json.sh" assistant:/root/set-env-from-google-json.sh
+Get-Clipboard | ssh assistant "tr -cd 'A-Za-z0-9_-' > /root/gsecret.txt"
 ```
+
+⚠️ **`tr -cd` ולא `tr -d '\r\n'`:** ‏PowerShell 5.1 מוסיף **BOM של שלושה בתים** בתחילת צינור לפקודה חיצונית, והקובץ יוצא ארוך ב-3 בתים מהערך האמיתי. ‏`tr -cd` משאיר רק את התווים המותרים ומנקה גם אותו. **לאמת מול `$c.Length` במחשב מול `wc -c` בשרת — שני המספרים חייבים להיות זהים.**
+
+אחר כך, למפתחות של גוגל:
 ```powershell
-scp "$env:USERPROFILE\Downloads\client_secret_<...>.json" assistant:/root/google-client.json
+scp "<נתיב הסקיל>\set-google-oauth.sh" assistant:/root/set-google-oauth.sh
 ```
 ```bash
-ssh assistant "sed -i 's/\r$//' /root/set-env-from-google-json.sh && bash /root/set-env-from-google-json.sh /root/google-client.json"
+ssh assistant "sed -i 's/\r$//' /root/set-google-oauth.sh && bash /root/set-google-oauth.sh <client_id> /root/gsecret.txt"
 ```
 
-הסקריפט מגדיר `GOOGLE_CLIENT_ID` ו-`GOOGLE_CLIENT_SECRET`, מאשר רק את אורכם, ומוחק את ה-JSON מהשרת. **למחוק אותו גם מתיקיית ההורדות במחשב.** ‏`sed -i 's/\r$//'` נדרש כי קובץ שנשלח מ-Windows עלול להגיע עם סופי שורה של CRLF, ו-bash נשבר עליהם.
+מזהה הלקוח אינו סוד (הוא גלוי בכתובת הדפדפן) ולכן עובר כארגומנט. הסקריפט מאשר רק אורכים, בודק שהערכים נראים נכון, ומוחק את קובץ הסוד. **בסוף לנקות את הלוח:** `Set-Clipboard -Value " "`.
+
+⚠️ **מלכודת בדף של גוגל:** ערך הסוד נמצא בתוך ה-`aria-label` של כפתור ההעתקה. **אסור לרשום את ה-aria-labels של הדף** — הסוד דולף לתמליל הסשן. למצוא את הכפתור לפי אינדקס או מיקום.
+
+⚠️ **מסלול קובץ ה-JSON כבר לא זמין.** גוגל הסירה את האפשרות לראות או להוריד סוד של לקוח קיים ("Viewing and downloading client secrets is no longer available"); "Download JSON" מוצע רק בחלון שנפתח ברגע יצירת הלקוח. הסקריפט `set-env-from-google-json.sh` נשאר למקרה שיש JSON ביד, אבל אי אפשר להשיג אותו ללקוח קיים.
 
 ## לפני הכול
 צריך להעלות את הסקריפט פעם אחת:
