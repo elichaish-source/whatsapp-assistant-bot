@@ -20,8 +20,9 @@ description: בדיקת מצב השרת - שכל הרכיבים רצים, שהד
    ```
 3. **וואטסאפ מחובר.** תקין כשהשדה `status` הוא `WORKING`. המפתח נקרא מהקובץ ישירות על השרת, ולא מודפס:
    ```bash
-   ssh assistant 'cd whatsapp-assistant-bot && curl -s -H "X-Api-Key: $(grep ^WAHA_API_KEY= .env | cut -d= -f2)" localhost:3000/api/sessions/default'
+   ssh assistant 'cd whatsapp-assistant-bot && curl -s -H "X-Api-Key: $(grep ^WAHA_API_KEY= .env | cut -d= -f2- | tr -d "\r\n")" localhost:3000/api/sessions/default'
    ```
+   ⚠️ **`-f2-` ולא `-f2`.** ‏18.11.2026 הבדיקה החזירה `401 Unauthorized` אף שוואטסאפ היה מחובר: המפתח עצמו מכיל `=`, ו-`-f2` חתך אותו באמצע. עם `-f2-` המפתח יוצא במלואו (48 תווים) והתשובה `WORKING`. **‏401 כאן אינו בהכרח ניתוק — קודם לוודא שהמפתח לא נחתך.**
 4. **גיבוי טרי.** תקין כשיש קובץ מ-24 השעות האחרונות:
    ```bash
    ssh assistant "ls -lt whatsapp-assistant-bot/backups | head -3"
