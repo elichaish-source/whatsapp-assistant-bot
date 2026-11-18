@@ -34,6 +34,10 @@ description: בדיקת מצב השרת - שכל הרכיבים רצים, שהד
    ```bash
    ssh assistant "free -h"
    ```
+7. **החיבור לגוגל** (משלב 4-1). תקין כש-`status` הוא `connected` ו-`last_checked_at` מהיממה האחרונה. **אפס שורות אינו תקלה** — פירושו שגוגל עוד לא חוברה:
+   ```bash
+   ssh assistant 'cd whatsapp-assistant-bot && sudo docker compose exec -T db psql -U assistant -d assistant -x -c "SELECT status, email, last_checked_at, left(last_error, 80) AS last_error FROM google_credentials"'
+   ```
 
 ## כשמשהו לא תקין
 - **רכיב לא רץ:** `ssh assistant "cd whatsapp-assistant-bot && sudo docker compose logs --tail 80 <שם-הרכיב>"`
@@ -42,6 +46,8 @@ description: בדיקת מצב השרת - שכל הרכיבים רצים, שהד
   - לבדוק שהדומיין מצביע לשרת: `nslookup elichay.duckdns.org`. התשובה צריכה להיות כתובת השרת.
   - לבדוק שפורטים 80 ו-443 פתוחים בלוח הבקרה של הענן.
 - **אין גיבוי טרי:** `ssh assistant "tail -20 /var/log/assistant-backup.log"`
+- **גוגל `disconnected`:** `last_error` אומר למה. ברוב המקרים (ביטול גישה, החלפת סיסמת הגוגל) הפתרון הוא חיבור מחדש בדשבורד ← הגדרות ← חיבור לגוגל. ⚠️ **אם הכתוב הוא שפענוח נכשל — `GOOGLE_TOKEN_KEY` ב-`.env` שונה**, ואז חיבור מחדש הוא הדרך היחידה; אין גיבוי לטוקן.
+- **גוגל `connected` אבל `last_checked_at` ישן מיממה:** לולאת התזכורות לא רצה. לבדוק ש-`WAHA_WEBHOOK_HMAC_KEY` מוגדר, ואת `sudo docker compose logs --tail 50 backend`.
 - **בשרת Oracle:** אם השרת עצמו לא זמין, ייתכן ש-Oracle עצרה אותו כי היה "לא פעיל" לאורך זמן. בודקים בלוח הבקרה: Compute ← Instances.
 
 תסכם למשתמש בעברית פשוטה: מה תקין, מה לא, ומה אתה מציע לעשות. לא לתקן כלום בלי אישור.

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import GoogleConnection from "../components/GoogleConnection";
 import { useLookups } from "../lookups";
 import type { Domain, Lookup } from "../types";
 
@@ -88,6 +89,7 @@ export default function Settings() {
     <div>
       <h1>הגדרות</h1>
       <div className="settings-grid">
+        <GoogleConnection />
         <EditableList title="משפחות לקוחות" path="/client-families" items={families} />
         <EditableList title="תחומים" path="/domains" items={domains} withRequiresClient />
         <EditableList title="סוגי משימה" path="/task-types" items={taskTypes} />

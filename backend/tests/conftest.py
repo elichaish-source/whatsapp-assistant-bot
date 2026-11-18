@@ -13,6 +13,12 @@ os.environ["COOKIE_SECURE"] = "false"
 os.environ["WAHA_WEBHOOK_HMAC_KEY"] = "test-hmac-key"
 # ללא מפתח Claude, כך שאף בדיקה לא תקרא ל-API בתשלום
 os.environ["ANTHROPIC_API_KEY"] = ""
+# חיבור גוגל מוגדר בבדיקות. אף בדיקה לא פונה לגוגל באמת — הקריאות
+# מוחלפות ב-monkeypatch — אבל בלי הערכים האלה הנתיבים מחזירים 503
+os.environ["DOMAIN"] = "test.example.com"
+os.environ["GOOGLE_CLIENT_ID"] = "test-client-id"
+os.environ["GOOGLE_CLIENT_SECRET"] = "test-client-secret"
+os.environ["GOOGLE_TOKEN_KEY"] = "test-token-key"
 
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
@@ -41,7 +47,7 @@ def clean_db():
             text(
                 "TRUNCATE bot_messages, observations, memory_facts, tasks, recurrences, projects,"
                 " client_family_links, clients,"
-                " login_codes, auth_sessions RESTART IDENTITY CASCADE"
+                " login_codes, auth_sessions, google_credentials RESTART IDENTITY CASCADE"
             )
         )
 

@@ -317,3 +317,38 @@ class Recurrence(TimestampMixin, Base):
     # כיבוי במקום מחיקה: ההתחייבות נגמרה, אבל המשימות שהיא יצרה נשארות
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     from_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class GoogleCredential(TimestampMixin, Base):
+    """החיבור לחשבון הגוגל. שורה אחת לכל היותר, או אפס כשאין חיבור.
+
+    ‏⚠️ שני הטוקנים מוצפנים (``app/crypto.py``) ואינם קריאים במסד ולא
+    בגיבוי. טוקן הרענון הוא הערך היקר: הוא לא פג מעצמו, ומי שמחזיק בו
+    יכול להנפיק טוקני גישה עד שהחיבור יבוטל מצד גוגל.
+
+    אין כאן ``user_id``: המערכת משרתת אדם אחד, בדיוק כמו ``owner_phone``.
+
+    ``status`` הוא ``connected`` או ``disconnected``. ניתוק אינו מוחק את
+    השורה בכוונה — ``last_error`` ו-``disconnected_notified_at`` הם מה
+    שמאפשר להראות במסך *למה* נותק, ולשלוח על כך הודעה אחת בלבד.
+    """
+
+    __tablename__ = "google_credentials"
+    __table_args__ = (
+        CheckConstraint("status IN ('connected', 'disconnected')", name="google_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # כתובת התיבה שחוברה. מוצגת במסך כדי שיהיה ברור איזה חשבון מחובר
+    email: Mapped[str] = mapped_column(String(320), default="", nullable=False)
+    refresh_token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    access_token_enc: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # ההרשאות שגוגל באמת נתנה, מופרדות ברווח. לא מה שביקשנו — המשתמש
+    # יכול להוריד סימון במסך האישור, ואז פעולה עתידית תיכשל בלי הסבר
+    scopes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="connected", nullable=False)
+    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # מתי יצאה ההודעה על הניתוק. קיים כדי שלא תצא שוב בכל סבב של הלולאה
+    disconnected_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -110,12 +110,25 @@ def delete_session(db: Session, token: str) -> None:
     db.commit()
 
 
+def session_phone(db: Session, token: str | None) -> str | None:
+    """המספר שמאחורי עוגיית החיבור, או None אם אין חיבור תקף.
+
+    נפרד מ-``require_user`` כי חזרה מ-OAuth חייבת לבדוק כניסה בלי לזרוק
+    ‏401: שם שגיאה כזאת הייתה מגיעה למשתמש כ-JSON ערום באמצע ניווט.
+    """
+    if not token:
+        return None
+    entry = db.scalar(select(AuthSession).where(AuthSession.token_hash == _hash(token)))
+    if entry and aware(entry.expires_at) > now() and is_owner(entry.phone):
+        return entry.phone
+    return None
+
+
 def require_user(
     session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
 ) -> str:
-    if session:
-        entry = db.scalar(select(AuthSession).where(AuthSession.token_hash == _hash(session)))
-        if entry and aware(entry.expires_at) > now() and is_owner(entry.phone):
-            return entry.phone
-    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "נדרשת כניסה")
+    phone = session_phone(db, session)
+    if phone is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "נדרשת כניסה")
+    return phone
