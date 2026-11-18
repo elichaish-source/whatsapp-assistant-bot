@@ -1,0 +1,150 @@
+<!doctype html>
+<!--
+  דף תנאי שימוש סטטי. נדרש על ידי Google Cloud Console בדף Branding
+  כתנאי לפרסום האפליקציה ל-"In production".
+
+  ⚠️ קובץ HTML עומד בפני עצמו, מחוץ לדשבורד ב-React, כדי שיוגש בלי
+  התחברות. ‏Caddy ממפה /terms אל הקובץ הזה.
+-->
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>תנאי שימוש — העוזר שלי</title>
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --text: #1e293b;
+        --muted: #64748b;
+        --accent: #0f766e;
+        --line: #e2e8f0;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #12151b;
+          --card: #1b2029;
+          --text: #e8edf4;
+          --muted: #9aa6b6;
+          --accent: #2dd4bf;
+          --line: #2b323d;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px 16px 64px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, "Segoe UI", Arial, sans-serif;
+        line-height: 1.75;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 28px 24px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 1.6rem;
+        color: var(--accent);
+      }
+      h2 {
+        margin: 32px 0 8px;
+        font-size: 1.12rem;
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+      }
+      h2:first-of-type {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .date {
+        margin: 0 0 24px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      ul {
+        padding-inline-start: 22px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+      code {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.88em;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 1px 5px;
+        direction: ltr;
+        display: inline-block;
+      }
+      a {
+        color: var(--accent);
+      }
+      footer {
+        max-width: 760px;
+        margin: 20px auto 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>תנאי שימוש</h1>
+      <p class="date">עודכן ב-18 בנובמבר 2026</p>
+
+      <h2>למי האפליקציה</h2>
+      <p>
+        «העוזר שלי» היא אפליקציה פרטית שבניתי לעצמי, ומשמשת משתמש אחד — אני,
+        בעל האפליקציה והשרת. אין בה הרשמה, אין בה חשבונות נוספים, והיא אינה
+        מוצעת לשימוש של אף אחד אחר. התנאים כאן נכתבים כי Google דורשת קישור
+        לתנאי שימוש כדי לאשר חיבור לחשבון הגוגל שלי.
+      </p>
+
+      <h2>מה האפליקציה עושה עם חשבון הגוגל</h2>
+      <ul>
+        <li>קוראת ומסכמת מיילים מתיבת הדואר שלי.</li>
+        <li>מארכבת מיילים לפי בקשה. <strong>אינה מוחקת מייל</strong> — ההרשאה שמאפשרת מחיקה לצמיתות אינה מבוקשת כלל.</li>
+        <li>שולחת תשובות <strong>רק אחרי שאישרתי את הנוסח המלא</strong>. אין שליחה אוטומטית.</li>
+        <li>קוראת את היומן שלי ויוצרת או משנה בו אירועים.</li>
+      </ul>
+      <p>
+        מה שנשמר בשרת ומה שאינו נשמר מתואר ב<a href="/privacy">מדיניות הפרטיות</a>.
+      </p>
+
+      <h2>אחריות</h2>
+      <p>
+        השירות הוא פרויקט פרטי ומסופק «כמו שהוא». הוא עשוי להיות לא זמין, לטעות
+        בניסוח או בסיווג, או להפסיק לעבוד — ואין לגביו שום התחייבות לזמינות,
+        לדיוק או לתמיכה. מכיוון שהמשתמש היחיד הוא בעל האפליקציה, אין כאן צד
+        נוסף שנושא בנזק או שמוטלת עליו אחריות.
+      </p>
+
+      <h2>הפסקת השימוש</h2>
+      <p>
+        אפשר לנתק את החיבור לגוגל בכל רגע מתוך הדשבורד או מדף
+        <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">
+          ההרשאות בחשבון הגוגל</a>,
+        ואז האפליקציה מאבדת כל גישה לדואר וליומן.
+      </p>
+
+      <h2>שינויים</h2>
+      <p>
+        אם יכולות האפליקציה ישתנו, הדף הזה יתעדכן ותאריך העדכון למעלה ישתנה.
+      </p>
+    </main>
+    <footer>
+      <a href="/privacy">מדיניות פרטיות</a> · <a href="/">העוזר שלי</a>
+    </footer>
+  </body>
+</html>

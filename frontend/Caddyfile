@@ -37,6 +37,14 @@
 		@app not path /assets/*
 		header @app Cache-Control "no-cache"
 
+		# דפי המדיניות הם קובצי HTML עומדים בפני עצמם ב-public/, ולא מסכים
+		# בדשבורד — כדי שיוגשו בלי התחברות. בלי ה-rewrite הזה try_files היה
+		# מחזיר להם את index.html של ה-SPA, וגוגל הייתה מקבלת מסך התחברות
+		# במקום מדיניות פרטיות. ‏Google Cloud Console דורשת את שני הקישורים
+		# בדף Branding כתנאי לפרסום האפליקציה ל-"In production"
+		@policy path /privacy /terms
+		rewrite @policy {path}.html
+
 		try_files {path} /index.html
 		file_server
 	}
