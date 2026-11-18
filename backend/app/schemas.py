@@ -249,3 +249,24 @@ class RecurrenceOut(ORMModel):
     next_due: date | None = None
     every: str = ""
     open_task_id: int | None = None
+
+
+# --- חיבור גוגל (שלב 4-1) ---
+
+
+class GoogleStatusOut(BaseModel):
+    """מה שמסך "חיבור לגוגל" בהגדרות צריך לדעת.
+
+    ‏``configured`` הוא על השרת ולא על החשבון: בלי שלושת המפתחות ב-.env
+    אין בכלל מה ללחוץ, וזה שונה מ"מוגדר אבל לא מחובר".
+    """
+
+    configured: bool
+    connected: bool
+    email: str = ""
+    status: str = ""
+    last_error: str = ""
+    connected_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    # הרשאות שביקשנו והמשתמש לא אישר. ריק = הכול תקין
+    missing_scopes: list[str] = []

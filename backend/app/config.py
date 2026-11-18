@@ -8,6 +8,9 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://assistant:assistant@db:5432/assistant"
 
+    # הדומיין שהדשבורד יושב עליו. ממנו נגזרת כתובת החזרה שגוגל מחזירה אליה
+    domain: str = ""
+
     # המספר של בעל המערכת בפורמט בינלאומי בלי + (למשל 972501234567)
     owner_phone: str = ""
     # ה-LID של אותו חשבון — מזהה הפרטיות של וואטסאפ, שמנוע GOWS משתמש בו
@@ -41,6 +44,18 @@ class Settings(BaseSettings):
     ntfy_topic: str = ""
     # טוקן עם הרשאת כתיבה לנושא הזה בלבד
     ntfy_token: str = ""
+
+    # --- חיבור גוגל (שלב 4-1) ---
+    # מתוך Google Cloud Console, סוג האפליקציה "Web application".
+    # ריק = הכפתור בדשבורד מושבת, ושום דבר אחר לא נשבר
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # המפתח שבו מוצפן טוקן הרענון במסד. מחרוזת אקראית חופשית.
+    # ⚠️ החלפתו פוסלת את החיבור הקיים וצריך לחבר מחדש
+    google_token_key: str = ""
+    # כל כמה שעות נבדק שהחיבור עדיין חי. עד פריסה 4-2 אין שום פעולה
+    # אחרת שנוגעת בטוקן, ולכן בלי הבדיקה הזאת ניתוק יושב בלי שנדע
+    google_check_hours: int = 24
 
     session_days: int = 30
     login_code_minutes: int = 5

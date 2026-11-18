@@ -123,3 +123,27 @@ export const REPEAT_LABELS: Record<RepeatUnit, string> = {
   month: "חודשים",
   year: "שנים",
 };
+
+export interface GoogleStatus {
+  // האם שלושת המפתחות קיימים ב-.env בשרת. בלעדיהם אין מה ללחוץ
+  configured: boolean;
+  connected: boolean;
+  email: string;
+  status: string;
+  last_error: string;
+  connected_at: string | null;
+  last_checked_at: string | null;
+  // הרשאות שביקשנו והמשתמש לא אישר במסך של גוגל
+  missing_scopes: string[];
+}
+
+/** הקודים שכתובת החזרה של גוגל מחזירה ב-?google= */
+export const GOOGLE_RESULTS: Record<string, string> = {
+  ok: "גוגל חוברה.",
+  partial: "גוגל חוברה, אבל לא כל ההרשאות אושרו.",
+  denied: "החיבור בוטל במסך של גוגל.",
+  state: "הבקשה לא הגיעה מהדשבורד, או שעברו יותר מ-15 דקות. נסה שוב.",
+  exchange: "גוגל לא השלימה את החיבור. נסה שוב.",
+  auth: "פג תוקף הכניסה לדשבורד באמצע החיבור. התחבר ונסה שוב.",
+  config: "חיבור גוגל לא מוגדר בשרת.",
+};

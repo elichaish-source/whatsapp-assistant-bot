@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import memory, notify, recurring, timeframe, waha
+from .. import gauth, memory, notify, recurring, timeframe, waha
 from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
@@ -146,5 +146,20 @@ def _tick() -> None:
             log.exception("יצירת משימות מהתחייבויות חוזרות נכשלה")
             db.rollback()
         send_due_reminders(db)
+        try:
+            watch_google(db)
+        except Exception:  # noqa: BLE001 - תקלה בבדיקת גוגל לא עוצרת כלום
+            log.exception("בדיקת החיבור לגוגל נכשלה")
+            db.rollback()
     finally:
         db.close()
+
+
+def watch_google(db: Session, moment: datetime | None = None) -> bool:
+    """הבדיקה התקופתית של החיבור לגוגל. מחזיר True אם יצאה הודעת ניתוק.
+
+    יושב בלולאה הזאת ולא בלולאה משלו כי היא כבר רצה, והבדיקה עצמה היא
+    קריאת רשת אחת ביממה. ‏``gauth.check`` מחליט לבד אם הגיע הזמן.
+    """
+    cred = gauth.check(db, moment or now())
+    return bool(cred) and gauth.announce_disconnect(db, cred)
