@@ -75,6 +75,15 @@ def _listed(items: list[gmail.EmailSummary]) -> list[str]:
     return [item.id for item in items]
 
 
+def _hint(count: int) -> str:
+    """ההנחיה לקריאת מייל, עם מספר שקיים באמת ברשימה.
+
+    ⚠️ היה כתוב כאן "תראה לי את 2" קבוע, וברשימה של מייל אחד זה הפנה
+    למספר שאינו קיים. נראה מול התיבה האמיתית ב-19.11.2026.
+    """
+    return f'\n\nלקריאת מייל שלם כתוב "תראה לי את {1 if count == 1 else 2}".'
+
+
 # --- סיכום לפי בקשה ---
 
 
@@ -118,8 +127,7 @@ def list_emails(db: Session, intent: Intent) -> Outcome:
     if filtered:
         heading += f" (ועוד {filtered} סוננו)"
 
-    body = f"{heading}:\n\n{_format(items, lines)}"
-    body += '\n\nלקריאת מייל שלם כתוב "תראה לי את 2".'
+    body = f"{heading}:\n\n{_format(items, lines)}" + _hint(len(items))
     return Outcome(body, listed_email_ids=_listed(items), clear_list=True)
 
 
@@ -159,8 +167,7 @@ def search_emails(db: Session, intent: Intent) -> Outcome:
         blocks.append(
             f"{index}. {item.sender()} · {when}\n   {item.subject}"
         )
-    body += "\n\n".join(blocks)
-    body += '\n\nלקריאת מייל שלם כתוב "תראה לי את 2".'
+    body += "\n\n".join(blocks) + _hint(len(found))
     return Outcome(body, listed_email_ids=_listed(found), clear_list=True)
 
 

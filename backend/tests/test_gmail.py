@@ -297,6 +297,98 @@ def test_broken_base64_returns_empty_instead_of_raising():
     assert gmail._b64("!!!not base64!!!") == b""
 
 
+# --- המייל המלא, מול תשובה בצורה של גוגל ---
+
+
+def gmail_message(body: str, mime: str = "text/plain", filename: str = "") -> dict:
+    raw = base64.urlsafe_b64encode(body.encode()).decode().rstrip("=")
+    part = {"mimeType": mime, "filename": filename, "body": {"data": raw}}
+    return {
+        "id": "gid-1",
+        "threadId": "th-1",
+        "internalDate": "1795057000000",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": "דני כהן <dani@example.com>"},
+                {"name": "Subject", "value": "נושא"},
+                {"name": "To", "value": "me@gmail.com"},
+            ],
+            "parts": [part],
+        },
+    }
+
+
+def test_crlf_line_endings_are_normalised(db, monkeypatch):
+    """⚠️ מייל מגיע ב-CRLF לפי התקן, ותו ה-CR הופיע בתשובה בוואטסאפ.
+
+    נראה ב-19.11.2026 על מייל אמיתי שהועבר.
+    """
+    monkeypatch.setattr(
+        gmail, "_get", lambda db_, path, params=None: gmail_message("שורה\r\nשנייה\rשלישית")
+    )
+    mail = gmail.fetch_full(db, "gid-1")
+    assert "\r" not in mail.body
+    assert mail.body == "שורה\nשנייה\nשלישית"
+
+
+def test_a_forwarded_mail_keeps_its_content(db, monkeypatch):
+    """⚠️ מייל שכל גופו הוא ההעברה מוצג במלואו, ולא מוחזר ריק.
+
+    זה מה שקרה בפועל ב-19.11.2026 על מייל מבית הספר: הגוף התחיל ב-
+    "---------- Forwarded message ---------" ולכן החיתוך היה ב-0.
+    ההתנהגות נכונה — אין מה להציג מלבד ההעברה — ולכן גם
+    ``quoted_removed`` נשאר False ואין הודעה על השמטה.
+    """
+    forwarded = (
+        "---------- Forwarded message ---------\r\n"
+        "מאת: מיכל <m@example.com>\r\n\r\n"
+        "הורים יקרים שלום רב,\r\n"
+    )
+    monkeypatch.setattr(gmail, "_get", lambda db_, path, params=None: gmail_message(forwarded))
+    mail = gmail.fetch_full(db, "gid-1")
+    assert "הורים יקרים" in mail.body
+    assert mail.quoted_removed is False
+
+
+def test_attachment_names_are_collected_and_the_body_is_not_the_attachment(db, monkeypatch):
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda db_, path, params=None: {
+            "id": "gid-1",
+            "threadId": "th-1",
+            "internalDate": "1795057000000",
+            "payload": {
+                "headers": [{"name": "Subject", "value": "עם קובץ"}],
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "filename": "",
+                        "body": {
+                            "data": base64.urlsafe_b64encode("הטקסט".encode())
+                            .decode()
+                            .rstrip("=")
+                        },
+                    },
+                    {"mimeType": "application/pdf", "filename": "מכתב.pdf", "body": {}},
+                ],
+            },
+        },
+    )
+    mail = gmail.fetch_full(db, "gid-1")
+    assert mail.attachments == ["מכתב.pdf"]
+    assert mail.body == "הטקסט"
+
+
+def test_an_html_only_mail_falls_back_to_stripped_text(db, monkeypatch):
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda db_, path, params=None: gmail_message("<p>שלום</p><p>עולם</p>", mime="text/html"),
+    )
+    assert gmail.fetch_full(db, "gid-1").body == "שלום\nעולם"
+
+
 # --- הסינון ---
 
 
