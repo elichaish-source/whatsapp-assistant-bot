@@ -347,7 +347,7 @@ def test_search_does_not_call_the_filter(db, connected, monkeypatch):
     monkeypatch.setattr(
         gmail, "triage", lambda *a, **k: pytest.fail("אין לסנן תוצאות חיפוש")
     )
-    assert "מצאתי 1 מיילים" in actions.execute(
+    assert "מצאתי מייל אחד" in actions.execute(
         db, Intent(action="search_emails", email_query="דני")
     ).reply
 
