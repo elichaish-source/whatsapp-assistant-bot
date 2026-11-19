@@ -42,6 +42,9 @@ Action = Literal[
     "add_task_type",
     "pause_recurrence",
     "resume_recurrence",
+    "list_emails",
+    "search_emails",
+    "show_email",
     "remember",
     "clarify",
     "unknown",
@@ -87,6 +90,11 @@ class Intent(BaseModel):
     active: Literal["", "yes", "no"] = ""
     # add_domain. false ולא null, מאותה סיבה
     requires_client: bool = False
+    # search_emails ו-show_email: טקסט החיפוש. מחרוזת ריקה ולא null,
+    # כי 15 מתוך 16 שדות האיחוד תפוסים ושדה איחוד נוסף היה שובר את ה-API
+    email_query: str = ""
+    # list_emails: הטווח. "" הוא היום, כברירת מחדל
+    email_scope: Literal["", "today", "week"] = ""
     # clarify
     question: str | None = None
 
@@ -154,6 +162,9 @@ INTENT_SCHEMA: dict = {
                 "add_task_type",
                 "pause_recurrence",
                 "resume_recurrence",
+                "list_emails",
+                "search_emails",
+                "show_email",
                 "remember",
                 "clarify",
                 "unknown",
@@ -186,6 +197,10 @@ INTENT_SCHEMA: dict = {
         "family_id": {"type": "integer"},
         "active": {"type": "string", "enum": ["", "yes", "no"]},
         "requires_client": {"type": "boolean"},
+        # ⚠️ שני אלה הם מחרוזת ומחרוזת-enum ולא איחוד, בכוונה. המונה
+        # נשאר 15 מתוך 16, בדיוק כמו ש-active ו-sql עשו לפניהם
+        "email_query": {"type": "string"},
+        "email_scope": {"type": "string", "enum": ["", "today", "week"]},
     },
     "required": [
         "action",
@@ -216,6 +231,8 @@ INTENT_SCHEMA: dict = {
         "family_id",
         "active",
         "requires_client",
+        "email_query",
+        "email_scope",
     ],
 }
 
@@ -288,6 +305,17 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - resume_recurrence: המשתמש מחזיר התחייבות שהושהתה. "תחזיר את דוח המע"מ",
   "תפעיל מחדש את הגבייה". ב-task_text מילה או שתיים מהכותרת שלה. כשהמשתמש
   אומר "תחזיר אותה" — קח את הכותרת מ"השיחה עד עכשיו".
+- list_emails: המשתמש רוצה לדעת מה נכנס לתיבת המייל. "מה נכנס היום",
+  "מה יש במייל", "מיילים חדשים", "מה קיבלתי". ב-email_scope כתוב "week"
+  רק אם ביקש במפורש טווח של כמה ימים ("מה נכנס השבוע", "מהשבוע"), ואחרת "".
+- search_emails: המשתמש מחפש מייל מסוים בתיבה. "מה כתב לי דני", "תמצא את
+  המייל על החוזה", "יש מייל מרואה החשבון?". ב-email_query כתוב את מילות
+  החיפוש בלבד — שם השולח או נושא, בלי "תמצא", בלי "המייל" ובלי "מה כתב לי".
+  "מה כתב לי דני" הוא email_query "דני".
+- show_email: המשתמש רוצה לקרוא מייל מתוך רשימה שהצגת. "תראה לי את כל
+  מייל 2", "תפתח את 3", "מה כתוב במייל הראשון". ב-task_number המספר
+  מהרשימה. אם המשתמש תיאר את המייל במילים ולא במספר ("תראה לי את המייל של
+  דני") — השאר task_number ריק וכתוב את המילים ב-email_query.
 - remember: המשתמש מבקש לזכור משהו לטווח ארוך, ולא לבצע משימה. "תזכור ש...",
   "שים לב שתמיד...", "מעכשיו...". ב-fact כתוב מה שהמשתמש אמר ולא יותר: משפט
   אחד בגוף ראשון, שיהיה מובן גם בעוד חצי שנה. ⚠️ אל תוסיף מסקנה, כלל או הוראה
@@ -359,13 +387,19 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   התחייבות חוזרת נעשית בדשבורד בלבד.
 - תחום, סוג משימה או לקוח? "תחום" ו"סוג משימה" נפתחים רק כשהמשתמש אמר את
   המילים האלה במפורש.
+- מייל או נתונים? "מה נכנס היום", "מה יש במייל" ו"מה כתב לי דני" הם תיבת
+  הדואר — list_emails או search_emails. "מה יש לי להיום" בלי המילה מייל הוא
+  רשימת משימות. ⚠️ אין שום שאילתת SQL על מיילים: תוכן המיילים אינו נשמר
+  במסד, ולכן query_data לא יכול לענות עליהם לעולם.
+- show_email או complete_task? אחרי רשימת מיילים, "תראה לי את 2" ו"מה כתוב
+  ב-2" הם show_email. "סיימתי 2" הוא עדיין משימה.
 - הודעה אחת היא פעולה אחת. אם המשתמש ביקש שתיים ("לקוח חדש משה כהן ותזכיר
   לי להתקשר אליו"), בצע את הראשונה בלבד.
 - כל שדה שאינו רלוונטי לפעולה שבחרת — null. יש שדות שבהם אין null לעולם:
   repeat_unit הוא "none" בכל פעולה שאינה add_recurring, ‏repeat_count,
   ‏lead_days ו-family_id הם 0, ‏requires_client הוא false, ו-sql, ‏name,
-  ‏phone, ‏email, ‏tax_id, ‏address ו-active הם מחרוזת ריקה בכל פעולה שאינה
-  משתמשת בהם."""
+  ‏phone, ‏email, ‏tax_id, ‏address, ‏active, ‏email_query ו-email_scope הם
+  מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
 
 
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{queries.SCHEMA_DOC}"

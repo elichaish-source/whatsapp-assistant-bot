@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     claude_model: str = "claude-opus-5-5"
     # עומק החשיבה של המודל: low, medium, high, xhigh, max. ברירת המחדל של Opus 5.5 היא medium
     claude_effort: str = "low"
+    # ⚠️ המודל הזול שמסנן מיילים (שלב 4-2). חלוקת המודלים אינה אופציה:
+    # בלי הסינון כל מייל שנכנס לתיבה היה מגיע למודל הגדול
+    claude_haiku_model: str = "claude-haiku-5-5"
     # כל כמה שניות נבדקות תזכורות שהגיע זמנן
     reminder_poll_seconds: int = 30
 
