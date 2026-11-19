@@ -251,16 +251,37 @@ def _midnight(days_back: int = 0) -> int:
     return int(start.timestamp())
 
 
+# לשונית "ראשי" = מה שבתיבה ואינו באחת מהלשוניות האחרות.
+#
+# ⚠️⚠️ **``category:primary`` אינו עובד, ומחזיר אפס תמיד.** נבדק מול התיבה
+# האמיתית ב-19.11.2026: אפס תוצאות גם בלי תאריך וגם בלי ``is:unread``, על
+# תיבה עם 33 מיילים בדואר הנכנס. התווית שקיימת בפועל היא
+# ``CATEGORY_PERSONAL`` ולא ``CATEGORY_PRIMARY``, והקטגוריות האחרות כן
+# עובדות (promotions, social, updates, forums). **זה לא נתפס באף בדיקה**,
+# כי הבדיקות אינן פונות לגוגל — רק הרצה מול התיבה גילתה את זה.
+#
+# ``category:personal`` החזיר בדיוק את אותן 4 תוצאות, ולכן שתי הצורות
+# נכונות. נבחר החיסור כי הוא מוגדר רק דרך קטגוריות שאומת שהן עובדות,
+# ומייל שלא סווג לשום קטגוריה נכנס בו במקום ליפול בין הכיסאות.
+_NOT_OTHER_TABS = (
+    "-category:promotions -category:social -category:updates -category:forums"
+)
+
+
 def inbox_query(scope: str) -> str:
     """השאילתה לסיכום לפי בקשה.
 
-    ‏**שלוש הכרעות שיושבות כאן:** ``is:unread`` — מייל שכבר פתחת בטלפון
-    לא חוזר בסיכום; ``category:primary`` — לשונית "ראשי" בלבד, כפי שהוכרע,
-    ופרסומות ועדכונים אינם נכנסים; ו-``-in:chats`` כדי שהודעות Chat של
-    גוגל לא ייחשבו מיילים.
+    ‏**ההכרעות שיושבות כאן:** ``in:inbox`` — רק הדואר הנכנס; ``is:unread``
+    — מייל שכבר פתחת בטלפון לא חוזר בסיכום; חיסור הלשוניות האחרות — "ראשי"
+    בלבד, ופרסומות ועדכונים אינם נכנסים; ו-``-in:chats`` כדי שהודעות Chat
+    של גוגל לא ייחשבו מיילים.
+
+    ⚠️ **``in:inbox`` הוא תנאי ולא קוסמטיקה.** בלעדיו כל מייל שארכבת ולא
+    נקרא נחשב "נכנס היום": מול התיבה האמיתית זה היה 100 מיילים במקום 4.
+    זה גם מה שישמור על 4-3 — מייל שארכבת לא יחזור בסיכום הבא.
     """
     days = 7 if scope == "week" else 0
-    return f"is:unread category:primary -in:chats after:{_midnight(days)}"
+    return f"in:inbox is:unread {_NOT_OTHER_TABS} -in:chats after:{_midnight(days)}"
 
 
 def list_inbox(db: Session, scope: str = "today", limit: int = INBOX_LIMIT) -> list[EmailSummary]:

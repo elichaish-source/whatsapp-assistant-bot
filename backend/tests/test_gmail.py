@@ -192,12 +192,38 @@ def test_nothing_is_lost_when_the_text_fits_in_the_part_limit():
 
 
 def test_the_inbox_query_is_unread_primary_only():
-    """שלוש ההכרעות של הסיכום יושבות בשורה אחת, ולכן נבדקות בשורה אחת."""
+    """ההכרעות של הסיכום יושבות בשורה אחת, ולכן נבדקות בשורה אחת."""
     query = gmail.inbox_query("today")
+    assert "in:inbox" in query
     assert "is:unread" in query
-    assert "category:primary" in query
     assert "-in:chats" in query
     assert "after:" in query
+
+
+def test_the_inbox_query_never_uses_category_primary():
+    """⚠️ רגרסיה על באג אמיתי שנתפס רק מול התיבה (19.11.2026).
+
+    ‏``category:primary`` מחזיר **אפס תמיד** — התווית שקיימת היא
+    ``CATEGORY_PERSONAL``. היכולת נראתה תקינה ו"מה נכנס היום" ענה "אין
+    מיילים חדשים" על תיבה עם 33 מיילים. לשונית "ראשי" מתקבלת מחיסור
+    הלשוניות האחרות.
+    """
+    for scope in ("today", "week"):
+        query = gmail.inbox_query(scope)
+        assert "category:primary" not in query, scope
+        for other in ("promotions", "social", "updates", "forums"):
+            assert f"-category:{other}" in query, (scope, other)
+
+
+def test_the_inbox_query_is_limited_to_the_inbox():
+    """⚠️ בלי ``in:inbox`` כל מייל שארכבת ולא נקרא נחשב "נכנס היום".
+
+    מול התיבה האמיתית: 100 מיילים במקום 4. זה גם מה שישמור על 4-3 —
+    מייל שארכבת לא אמור לחזור בסיכום הבא.
+    """
+    assert "in:inbox" in gmail.inbox_query("today")
+    # ⚠️ ובחיפוש **להיפך**: הוא חייב להגיע גם לארכיון
+    assert "in:inbox" not in gmail.search_query("דני")
 
 
 def test_the_week_scope_reaches_further_back():
@@ -210,10 +236,12 @@ def test_the_week_scope_reaches_further_back():
 def test_the_search_query_covers_the_whole_mailbox():
     """⚠️ חיפוש אינו מוגבל ללשונית "ראשי" ואינו מוגבל למה שלא נקרא."""
     query = gmail.search_query("דני")
-    assert "category:primary" not in query
     assert "is:unread" not in query
     assert "in:anywhere" in query
     assert query.startswith("דני ")
+    # ⚠️ ובלי חיסור הלשוניות: "מה כתב לי דני" צריך למצוא מייל גם אם
+    # ג'ימייל סיווג אותו כעדכון או כפרסומת
+    assert "-category:" not in query
 
 
 def test_the_search_query_collapses_whitespace():
