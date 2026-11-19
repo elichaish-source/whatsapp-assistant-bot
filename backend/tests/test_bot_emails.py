@@ -127,6 +127,25 @@ def test_the_summary_returns_a_numbered_list(db, connected, monkeypatch):
     assert outcome.listed_email_ids == ["gid-1", "gid-2"]
 
 
+def test_the_hint_points_at_a_number_that_exists(db, connected, monkeypatch):
+    """⚠️ נראה מול התיבה האמיתית: רשימה של מייל אחד הפנתה ל"תראה לי את 2"."""
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1)])
+    no_filter(monkeypatch)
+    one = actions.execute(db, Intent(action="list_emails")).reply
+    assert 'תראה לי את 1' in one
+    assert 'תראה לי את 2' not in one
+
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2)])
+    two = actions.execute(db, Intent(action="list_emails")).reply
+    assert 'תראה לי את 2' in two
+
+
+def test_the_search_hint_also_points_at_a_number_that_exists(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "search", lambda *a, **k: [mail(1)])
+    reply = actions.execute(db, Intent(action="search_emails", email_query="דני")).reply
+    assert 'תראה לי את 1' in reply
+
+
 def test_an_empty_inbox_says_so(db, connected, monkeypatch):
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [])
     outcome = actions.execute(db, Intent(action="list_emails"))

@@ -367,6 +367,11 @@ def fetch_full(db: Session, message_id: str) -> EmailFull:
         rich = next((value for mime, value in texts if mime == "text/html"), "")
         plain = _html_to_text(rich)
 
+    # ⚠️ נורמליזציה של סופי שורה לפני הכול. מייל מגיע ב-CRLF לפי התקן,
+    # ותו ה-CR שנשאר הופיע בפועל בתוך התשובה בוואטסאפ (נראה ב-19.11.2026
+    # על מייל אמיתי שהועבר). הוא גם היה שובר ביטוי שמסתיים ב-‎$‎
+    plain = plain.replace("\r\n", "\n").replace("\r", "\n")
+
     body, removed = strip_quoted(plain)
     name, address = parseaddr(head.get("from", ""))
     return EmailFull(
