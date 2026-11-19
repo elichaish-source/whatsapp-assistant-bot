@@ -156,7 +156,7 @@ def test_an_empty_inbox_says_so(db, connected, monkeypatch):
 def test_the_week_scope_changes_the_wording_and_the_query(db, connected, monkeypatch):
     seen: dict = {}
 
-    def capture(db_, scope):
+    def capture(db_, scope, show_all=False):
         seen["scope"] = scope
         return []
 
@@ -169,7 +169,7 @@ def test_the_week_scope_changes_the_wording_and_the_query(db, connected, monkeyp
 def test_the_default_scope_is_today(db, connected, monkeypatch):
     seen: dict = {}
 
-    def capture(db_, scope):
+    def capture(db_, scope, show_all=False):
         seen["scope"] = scope
         return []
 
@@ -248,8 +248,50 @@ def test_show_all_skips_the_filter_entirely(db, connected, monkeypatch):
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2), mail(3)])
     monkeypatch.setattr(gmail, "triage", lambda *a, **k: pytest.fail("אין לסנן כאן"))
     outcome = actions.execute(db, Intent(action="list_emails", email_show_all=True))
-    assert "נכנסו היום 3 מיילים, הכול" in outcome.reply
+    assert "נכנסו היום 3 מיילים בדואר הנכנס, הכול" in outcome.reply
     assert outcome.listed_email_ids == ["gid-1", "gid-2", "gid-3"]
+
+
+def test_show_all_is_passed_down_to_the_query(db, connected, monkeypatch):
+    """⚠️ הלב של התיקון: השכבות נופלות ב-gmail ולא רק הסינון ב-bot."""
+    seen: dict = {}
+
+    def capture(db_, scope, show_all=False):
+        seen["show_all"] = show_all
+        return []
+
+    monkeypatch.setattr(gmail, "list_inbox", capture)
+    actions.execute(db, Intent(action="list_emails", email_show_all=True))
+    assert seen["show_all"] is True
+    actions.execute(db, Intent(action="list_emails"))
+    assert seen["show_all"] is False
+
+
+def test_a_long_list_is_split_into_several_messages(db, connected, monkeypatch):
+    """⚠️ 29 מיילים בשבוע מול התיבה האמיתית, ווואטסאפ חותכת ב-4096.
+
+    בלי הפיצול סוף הרשימה היה נאבד בשקט, יחד עם המספרים הגבוהים.
+    """
+    # נושא באורך של פרסומת אמיתית, כי שם ההבדל נמצא: 45 מיילים עם נושא
+    # קצר נכנסים בהודעה אחת, ועם נושא אמיתי הם חורגים
+    many = [
+        gmail.EmailSummary(
+            id=f"gid-{index}",
+            thread_id=f"th-{index}",
+            sender_name=f"שולח מספר {index}",
+            sender_email=f"s{index}@example.com",
+            subject="נושא ארוך כמו של פרסומת אמיתית, עם הבטחה גדולה ועוד פסיק " * 2,
+            snippet="",
+            received_at=datetime(2026, 11, 19, 9, 0, tzinfo=IL),
+        )
+        for index in range(1, 46)
+    ]
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: many)
+    outcome = actions.execute(db, Intent(action="list_emails", email_show_all=True))
+    assert len(outcome.parts) > 1
+    # ⚠️ והמספור שלם, גם למיילים שיצאו בהודעה השנייה
+    assert len(outcome.listed_email_ids) == 45
+    assert outcome.listed_email_ids[-1] == "gid-45"
 
 
 def test_show_all_numbers_everything_so_a_filtered_mail_can_be_opened(db, connected, monkeypatch):

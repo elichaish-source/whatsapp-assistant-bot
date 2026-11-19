@@ -49,6 +49,9 @@ TIMEOUT = 30
 # כמה מיילים נשלפים לסיכום. התקרה אינה חישובית אלא מעשית: מעבר לזה
 # הרשימה בוואטסאפ ארוכה מכדי לקרוא, וגם הסינון מתחיל לעלות כסף
 INBOX_LIMIT = 25
+# "תראה לי את כולם" מוריד את הסינון, ולכן צריך תקרה גבוהה יותר: בתיבה
+# האמיתית היו 29 מיילים בדואר הנכנס בשבוע. התשובה מתפצלת להודעות
+SHOW_ALL_LIMIT = 60
 SEARCH_LIMIT = 10
 # כמה אחורה מחפשים כשהמשתמש לא אמר. חצי שנה מכסה "מה כתב לי דני"
 # בלי לשלוף את כל ההיסטוריה של התיבה
@@ -251,42 +254,53 @@ def _midnight(days_back: int = 0) -> int:
     return int(start.timestamp())
 
 
-# לשונית "ראשי" = מה שבתיבה ואינו באחת מהלשוניות האחרות.
+# הלשוניות שאינן נכנסות לסיכום.
+#
+# ⚠️ **"עדכונים" **כן** נכנס, והוכרע כך על ידי המשתמש ב-19.11.2026** אחרי
+# שראה את המספרים האמיתיים: מתוך חמישה מיילים שלא נקראו באותו יום, ארבעה
+# יושבו ב"עדכונים" והסיכום הראה לו אחד. גוגל שמה שם חשבוניות, אישורים
+# והודעות ממשלתיות — דברים שכן דורשים טיפול — ועל הרעש אחראי Haiku ולא
+# הסיווג של גוגל.
 #
 # ⚠️⚠️ **``category:primary`` אינו עובד, ומחזיר אפס תמיד.** נבדק מול התיבה
 # האמיתית ב-19.11.2026: אפס תוצאות גם בלי תאריך וגם בלי ``is:unread``, על
 # תיבה עם 33 מיילים בדואר הנכנס. התווית שקיימת בפועל היא
 # ``CATEGORY_PERSONAL`` ולא ``CATEGORY_PRIMARY``, והקטגוריות האחרות כן
-# עובדות (promotions, social, updates, forums). **זה לא נתפס באף בדיקה**,
-# כי הבדיקות אינן פונות לגוגל — רק הרצה מול התיבה גילתה את זה.
+# עובדות. **זה לא נתפס באף בדיקה**, כי הבדיקות אינן פונות לגוגל.
 #
-# ``category:personal`` החזיר בדיוק את אותן 4 תוצאות, ולכן שתי הצורות
-# נכונות. נבחר החיסור כי הוא מוגדר רק דרך קטגוריות שאומת שהן עובדות,
-# ומייל שלא סווג לשום קטגוריה נכנס בו במקום ליפול בין הכיסאות.
-_NOT_OTHER_TABS = (
-    "-category:promotions -category:social -category:updates -category:forums"
-)
+# החיסור נבחר גם כי הוא מוגדר רק דרך קטגוריות שאומת שהן עובדות, ומייל
+# שלא סווג לשום קטגוריה נכנס בו במקום ליפול בין הכיסאות.
+_EXCLUDED_TABS = "-category:promotions -category:social -category:forums"
 
 
-def inbox_query(scope: str) -> str:
+def inbox_query(scope: str, show_all: bool = False) -> str:
     """השאילתה לסיכום לפי בקשה.
 
-    ‏**ההכרעות שיושבות כאן:** ``in:inbox`` — רק הדואר הנכנס; ``is:unread``
-    — מייל שכבר פתחת בטלפון לא חוזר בסיכום; חיסור הלשוניות האחרות — "ראשי"
-    בלבד, ופרסומות ועדכונים אינם נכנסים; ו-``-in:chats`` כדי שהודעות Chat
-    של גוגל לא ייחשבו מיילים.
+    ‏**ברירת המחדל:** ``in:inbox`` — רק הדואר הנכנס; ``is:unread`` — מייל
+    שכבר פתחת בטלפון לא חוזר; חיסור פרסומות, רשתות ופורומים — כלומר
+    "ראשי" ו"עדכונים"; ו-``-in:chats`` כדי שהודעות Chat לא ייחשבו מיילים.
+
+    ‏**``show_all``: באמת הכול** — כל מה שבדואר הנכנס בטווח הזמן, גם נקרא
+    וגם פרסומות. ⚠️ הוכרע ב-19.11.2026 אחרי שהמשתמש ביקש "תראה לי את
+    כולם" וקיבל חמישה מתוך 29: המילה "כולם" חייבת לעשות מה שהיא אומרת,
+    ולכן כאן נופלות **כל** השכבות ולא רק הסינון של Haiku.
 
     ⚠️ **``in:inbox`` הוא תנאי ולא קוסמטיקה.** בלעדיו כל מייל שארכבת ולא
     נקרא נחשב "נכנס היום": מול התיבה האמיתית זה היה 100 מיילים במקום 4.
     זה גם מה שישמור על 4-3 — מייל שארכבת לא יחזור בסיכום הבא.
     """
-    days = 7 if scope == "week" else 0
-    return f"in:inbox is:unread {_NOT_OTHER_TABS} -in:chats after:{_midnight(days)}"
+    since = f"after:{_midnight(7 if scope == 'week' else 0)}"
+    if show_all:
+        return f"in:inbox -in:chats {since}"
+    return f"in:inbox is:unread {_EXCLUDED_TABS} -in:chats {since}"
 
 
-def list_inbox(db: Session, scope: str = "today", limit: int = INBOX_LIMIT) -> list[EmailSummary]:
-    """מה שנכנס ולא נקרא, מהחדש לישן."""
-    ids = _message_ids(db, inbox_query(scope), limit)
+def list_inbox(
+    db: Session, scope: str = "today", show_all: bool = False, limit: int | None = None
+) -> list[EmailSummary]:
+    """מה שנכנס, מהחדש לישן. ‏``show_all`` מוריד את כל שכבות הסינון."""
+    cap = limit or (SHOW_ALL_LIMIT if show_all else INBOX_LIMIT)
+    ids = _message_ids(db, inbox_query(scope, show_all), cap)
     found = _summaries(db, ids)
     found.sort(key=lambda item: item.received_at, reverse=True)
     return found
