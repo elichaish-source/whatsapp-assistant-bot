@@ -176,6 +176,10 @@ class BotMessage(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
     # המשימות שהוצגו בתשובה, לפי הסדר, מופרדות בפסיק. כך "סיימתי 3" יודע למה הכוונה
     listed_task_ids: Mapped[str | None] = mapped_column(Text)
+    # המיילים שהוצגו, לפי הסדר, מופרדים בפסיק. כך "תראה לי את 2" יודע למה
+    # הכוונה. ⚠️ עמודה נפרדת ולא שימוש חוזר בזו שמעליה: מזהה מייל של גוגל
+    # הוא מחרוזת ולא מספר שלם. ⚠️ **רק המזהה** — שום תוכן מייל אינו נשמר
+    listed_email_ids: Mapped[str | None] = mapped_column(Text)
     # העובדה שנרשמה לזיכרון בעקבות ההודעה, כדי ש"בטל" ידע למחוק אותה
     fact_id: Mapped[int | None] = mapped_column(ForeignKey("memory_facts.id", ondelete="SET NULL"))
     # ההתחייבות החוזרת שנרשמה בעקבות ההודעה, כדי ש"בטל" ידע לבטל אותה

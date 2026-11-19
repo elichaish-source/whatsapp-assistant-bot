@@ -199,8 +199,16 @@ class Outcome:
         clear_list: bool = False,
         undo: dict | None = None,
         pending: dict | None = None,
+        listed_email_ids: list[str] | None = None,
+        parts: list[str] | None = None,
     ) -> None:
         self.reply = reply
+        # ‏מזהי המיילים שהוצגו, לפי הסדר. עמודה נפרדת מזו של המשימות,
+        # כי מזהה של גוגל הוא מחרוזת ולא מספר שלם
+        self.listed_email_ids = listed_email_ids or []
+        # ‏כמה הודעות וואטסאפ במקום אחת, כשהתשובה ארוכה מדי. ריק = הודעה
+        # אחת, שהיא reply עצמה
+        self.parts = parts or []
         # המצב שלפני השינוי, כדי ש"בטל" יחזיר אותו
         self.undo = undo
         # פעולה שמחכה ל"כן" בהודעה הבאה. לא בוצעה עדיין
@@ -763,6 +771,9 @@ def _last_bot_task_row(db: Session) -> BotMessage | None:
 # מה ש"בטל" יודע לבטל: משימה שנוצרה, תיקון שלה, או עובדה שנרשמה בזיכרון
 _ENTITY_ACTIONS = ("add_client", "update_client", "add_project", "update_project")
 _LIST_ACTIONS = ("add_domain", "add_task_type", "pause_recurrence", "resume_recurrence")
+# קריאה מהתיבה. אינן נכללות ב-_UNDOABLE: קריאה אינה משנה דבר, ולכן
+# "בטל" אחרי רשימת מיילים צריך להמשיך אחורה למה שכן שונה
+_EMAIL_ACTIONS = ("list_emails", "search_emails", "show_email")
 # confirm נכלל בגלל יצירה שאושרה ("ליצור בכל זאת?" ואז "כן"). מחיקה שאושרה
 # לא משאירה אחריה מה לבטל, ולכן השורה שלה לא נמצאת בחיפוש שלמטה
 _UNDOABLE = (
@@ -1008,6 +1019,10 @@ def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcom
         from . import entities
 
         return getattr(entities, intent.action)(db, intent)
+    if intent.action in _EMAIL_ACTIONS:
+        from . import emails
+
+        return getattr(emails, intent.action)(db, intent)
     if intent.action == "add_task":
         return _add_task(db, intent)
     if intent.action == "add_recurring":

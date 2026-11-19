@@ -167,6 +167,31 @@ def test_the_recurring_fields_have_an_empty_value_instead_of_null():
     assert "none" in SYSTEM_PROMPT
 
 
+def test_the_email_fields_are_not_unions():
+    """שלב 4-2 נבנה בלי לגעת במונה, ש-15 מתוך 16 שלו היו תפוסים.
+
+    ‏``email_query`` הוא מחרוזת רגילה ו-``email_scope`` הוא enum של
+    מחרוזות שכולל "". שינוי של אחד מהם ל-nullable יעלה את המונה ל-16,
+    והבא אחריו ישבור את הבוט לגמרי.
+    """
+    for name in ("email_query", "email_scope"):
+        prop = INTENT_SCHEMA["properties"][name]
+        assert "anyOf" not in prop, name
+        assert prop["type"] == "string", name
+    assert "" in INTENT_SCHEMA["properties"]["email_scope"]["enum"]
+    assert Intent(action="list_emails").email_scope == ""
+    assert Intent(action="list_emails").email_query == ""
+
+
+def test_the_email_actions_reach_their_handlers():
+    """שלוש הפעולות החדשות קיימות גם ב-Literal וגם ב-enum של הסכימה."""
+    for name in ("list_emails", "search_emails", "show_email"):
+        assert name in INTENT_SCHEMA["properties"]["action"]["enum"], name
+        assert name in actions._EMAIL_ACTIONS, name
+    # ⚠️ קריאה אינה משנה דבר, ולכן "בטל" צריך לדלג מעליה אחורה
+    assert not set(actions._EMAIL_ACTIONS) & set(actions._UNDOABLE)
+
+
 def test_nullable_enums_are_written_as_anyof():
     for name in ("priority", "list_filter"):
         options = INTENT_SCHEMA["properties"][name]["anyOf"]

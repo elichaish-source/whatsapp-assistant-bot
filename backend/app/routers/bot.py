@@ -126,10 +126,18 @@ def handle_message(wa_message_id: str, body: str) -> None:
             row.listed_task_ids = ""
         else:
             row.listed_task_ids = None
+        # ‏None ולא "": רשימת המיילים האחרונה נשארת תקפה גם אחרי הודעות
+        # שאינן על מיילים, בדיוק כמו שרשימת המשימות נשארת תקפה
+        row.listed_email_ids = (
+            ",".join(outcome.listed_email_ids) if outcome.listed_email_ids else None
+        )
         if outcome.query_error:
             row.error = outcome.query_error
         db.commit()
-        _reply(settings.owner_phone, outcome.reply)
+        # מייל ארוך יוצא בכמה הודעות. בכל שאר המקרים parts ריק, וזו
+        # בדיוק אותה שליחה אחת שהייתה כאן קודם
+        for part in outcome.parts or [outcome.reply]:
+            _reply(settings.owner_phone, part)
     except Exception:  # noqa: BLE001 - רץ ברקע, אין למי לזרוק
         log.exception("טיפול בהודעת וואטסאפ נכשל")
     finally:
