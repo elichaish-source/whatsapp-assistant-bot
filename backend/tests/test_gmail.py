@@ -241,6 +241,37 @@ def test_the_inbox_query_is_unread_primary_only():
     assert "after:" in query
 
 
+def test_the_default_summary_includes_updates():
+    """⚠️ הוכרע על ידי המשתמש ב-19.11.2026 אחרי שראה את המספרים.
+
+    מתוך חמישה מיילים שלא נקראו באותו יום, **ארבעה** יושבו ב"עדכונים"
+    והסיכום הראה לו אחד. גוגל שמה שם חשבוניות ואישורים, ועל הרעש אחראי
+    ‏Haiku ולא הסיווג של גוגל.
+    """
+    query = gmail.inbox_query("today")
+    assert "-category:updates" not in query
+    for other in ("promotions", "social", "forums"):
+        assert f"-category:{other}" in query, other
+
+
+def test_show_all_really_drops_every_layer():
+    """⚠️ "כולם" חייב לעשות מה שהוא אומר.
+
+    המשתמש ביקש "תראה לי את כולם" וקיבל חמישה מתוך 29, כי המילה הורידה
+    רק את הסינון של Haiku ולא את "לא נקרא" ואת הלשוניות.
+    """
+    query = gmail.inbox_query("today", show_all=True)
+    assert "is:unread" not in query
+    assert "-category:" not in query
+    # הדואר הנכנס כן נשאר: "כולם" אינו הארכיון ואינו הספאם
+    assert "in:inbox" in query
+    assert "after:" in query
+
+
+def test_show_all_has_a_higher_cap_than_the_summary():
+    assert gmail.SHOW_ALL_LIMIT > gmail.INBOX_LIMIT
+
+
 def test_the_inbox_query_never_uses_category_primary():
     """⚠️ רגרסיה על באג אמיתי שנתפס רק מול התיבה (19.11.2026).
 
@@ -252,7 +283,7 @@ def test_the_inbox_query_never_uses_category_primary():
     for scope in ("today", "week"):
         query = gmail.inbox_query(scope)
         assert "category:primary" not in query, scope
-        for other in ("promotions", "social", "updates", "forums"):
+        for other in ("promotions", "social", "forums"):
             assert f"-category:{other}" in query, (scope, other)
 
 

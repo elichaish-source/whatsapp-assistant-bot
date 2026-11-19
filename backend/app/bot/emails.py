@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -55,6 +56,16 @@ def _ready(db: Session) -> Outcome | None:
 # --- עיצוב הרשימה ---
 
 
+def _when(moment) -> str:
+    """שעה למייל של היום, ותאריך ושעה לכל השאר.
+
+    ⚠️ בלי התאריך, סיכום שבועי הציג "20:36" ו-"12:29" זה מתחת לזה כאילו
+    הם מאותו יום. נראה בתשובה אמיתית ב-19.11.2026.
+    """
+    today = datetime.now(tz=gmail.local_tz()).date()
+    return moment.strftime("%H:%M" if moment.date() == today else "%d/%m %H:%M")
+
+
 def _format(items: list[gmail.EmailSummary], lines: dict[str, str]) -> str:
     """הרשימה הממוספרת: שולח ושעה, ומתחת שורת התיאור.
 
@@ -62,9 +73,8 @@ def _format(items: list[gmail.EmailSummary], lines: dict[str, str]) -> str:
     """
     blocks = []
     for index, item in enumerate(items, start=1):
-        when = item.received_at.strftime("%H:%M")
-        detail = (lines.get(item.id) or item.snippet)[:200].strip()
-        block = f"{index}. {item.sender()} · {when}"
+        detail = (lines.get(item.id) or item.subject)[:200].strip()
+        block = f"{index}. {item.sender()} · {_when(item.received_at)}"
         if detail:
             block += f"\n   {detail}"
         blocks.append(block)
@@ -73,6 +83,22 @@ def _format(items: list[gmail.EmailSummary], lines: dict[str, str]) -> str:
 
 def _listed(items: list[gmail.EmailSummary]) -> list[str]:
     return [item.id for item in items]
+
+
+def _reply(body: str, items: list[gmail.EmailSummary]) -> Outcome:
+    """רשימה ממוספרת, מפוצלת להודעות אם היא ארוכה.
+
+    ⚠️ הפיצול נחוץ כאן ולא רק במייל בודד: "תראה לי את כולם" על שבוע
+    החזיר 29 מיילים מול התיבה האמיתית, ווואטסאפ חותכת ב-4096 תווים —
+    כלומר **סוף הרשימה היה נאבד בשקט, יחד עם המספרים הגבוהים.**
+    """
+    parts = gmail.split_message(body, max_parts=6)
+    return Outcome(
+        "\n".join(parts),
+        listed_email_ids=_listed(items),
+        clear_list=True,
+        parts=parts if len(parts) > 1 else None,
+    )
 
 
 def _count(number: int) -> str:
@@ -113,8 +139,9 @@ def list_emails(db: Session, intent: Intent) -> Outcome:
         return blocked
 
     scope = intent.email_scope or "today"
+    show_all = bool(intent.email_show_all)
     try:
-        found = gmail.list_inbox(db, scope)
+        found = gmail.list_inbox(db, scope, show_all)
     except gauth.GoogleDisconnected:
         return Outcome(DISCONNECTED)
     except (gmail.GmailError, gauth.GoogleError) as exc:
@@ -126,13 +153,11 @@ def list_emails(db: Session, intent: Intent) -> Outcome:
         # משימות אינו רלוונטי יותר
         return Outcome(f"אין מיילים חדשים {span}.", clear_list=True)
 
-    # "תראה לי את כולם" — בלי סינון בכלל. הסינון הוא שירות, לא שוער
-    if intent.email_show_all:
-        lines = {item.id: item.snippet for item in found}
-        body = f"{_arrived(len(found), span)}, הכול:\n\n{_format(found, lines)}"
-        return Outcome(
-            body + _hint(len(found)), listed_email_ids=_listed(found), clear_list=True
-        )
+    # "תראה לי את כולם" — **כל** השכבות נופלות, לא רק הסינון של Haiku.
+    # ⚠️ הוכרע כך אחרי שהמשתמש ביקש "כולם" וקיבל 5 מתוך 29
+    if show_all:
+        body = f"{_arrived(len(found), span)} בדואר הנכנס, הכול:\n\n{_format(found, {})}"
+        return _reply(body + _hint(len(found)), found)
 
     verdicts = gmail.triage(found, gmail.client_addresses(db))
     passed = [item for item in verdicts if item.relevant]
@@ -154,7 +179,7 @@ def list_emails(db: Session, intent: Intent) -> Outcome:
     body = f"{heading}:\n\n{_format(items, lines)}" + _hint(len(items))
     if filtered:
         body += f"\n{SHOW_ALL}"
-    return Outcome(body, listed_email_ids=_listed(items), clear_list=True)
+    return _reply(body, items)
 
 
 # --- חיפוש ---
@@ -194,7 +219,7 @@ def search_emails(db: Session, intent: Intent) -> Outcome:
             f"{index}. {item.sender()} · {when}\n   {item.subject}"
         )
     body += "\n\n".join(blocks) + _hint(len(found))
-    return Outcome(body, listed_email_ids=_listed(found), clear_list=True)
+    return _reply(body, found)
 
 
 # --- מייל מלא ---
