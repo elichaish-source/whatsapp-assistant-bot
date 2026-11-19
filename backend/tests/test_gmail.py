@@ -51,6 +51,47 @@ def test_gmail_english_quote_header_is_cut():
     assert removed is True
 
 
+def test_a_hebrew_quote_header_behind_a_bidi_mark_is_cut():
+    """⚠️⚠️ הבאג שהשאיר את שורת הציטוט תלויה בסוף המייל (19.11.2026).
+
+    ג'ימייל שותלת ‏U+202B לפני שורת הציטוט בעברית. התו אינו רווח, ולכן
+    ``^\\s*בתאריך`` לא התאים לו לעולם — החיתוך "עבד" והמשתמש ראה
+    "בתאריך יום ג׳, 17 בנוב׳ 2026 ב" בסוף הגוף. הצורה כאן היא בדיוק מה
+    שחזר מהתיבה האמיתית.
+    """
+    text = (
+        "לא נגעתי בכלל בתנועות כספיות .. ממש מוזר אנסה להבין מה קרה\n\n"
+        "‫בתאריך יום ג׳, 17 בנוב׳ 2026 ב-15:18 מאת אליחי שפירא "
+        "<eli@example.com>‬‏ כתב/ה:\n"
+        "‫> ההוצאות שנשלחו אליכם‬\n"
+    )
+    body, removed = gmail.strip_quoted(gmail.normalize(text))
+    assert body == "לא נגעתי בכלל בתנועות כספיות .. ממש מוזר אנסה להבין מה קרה"
+    assert removed is True
+    assert "בתאריך" not in body
+
+
+def test_a_wrapped_hebrew_quote_header_is_cut():
+    """ג'ימייל שוברת את הכותרת לשתי שורות כשהיא ארוכה."""
+    text = (
+        "תודה ממתין\n\n"
+        "‫בתאריך יום ג׳, 17 בנוב׳ 2026 ב-9:16 מאת ‪Miryam Elnadaf‬‏ <‪\n"
+        "miryame@example.com‬> כתב/ה:\n"
+    )
+    body, removed = gmail.strip_quoted(gmail.normalize(text))
+    assert body == "תודה ממתין"
+    assert removed is True
+
+
+def test_normalize_removes_bidi_marks_and_fixes_line_endings():
+    raw = "‫שלום‬\r\n‏עולם\r"
+    assert gmail.normalize(raw) == "שלום\nעולם\n"
+
+
+def test_normalize_keeps_real_text_intact():
+    assert gmail.normalize("שלום עולם 123 a@b.com") == "שלום עולם 123 a@b.com"
+
+
 def test_a_wrapped_english_quote_header_is_still_cut():
     """גוגל שוברת את השורה כשהיא ארוכה. שתי שורות עוד נחשבות כותרת."""
     text = (
@@ -329,6 +370,22 @@ def test_crlf_line_endings_are_normalised(db, monkeypatch):
     mail = gmail.fetch_full(db, "gid-1")
     assert "\r" not in mail.body
     assert mail.body == "שורה\nשנייה\nשלישית"
+
+
+def test_a_real_hebrew_reply_is_cut_end_to_end(db, monkeypatch):
+    """הצורה שחזרה מהתיבה האמיתית, דרך fetch_full ולא רק דרך strip_quoted."""
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda db_, path, params=None: gmail_message(
+            "כל ההוצאות ששלחנו אליכם בפנים??\r\n\r\n"
+            "‫בתאריך יום ג׳, 17 בנוב׳ 2026 ב-15:18 מאת אליחי שפירא "
+            "<eli@example.com>‬‏ כתב/ה:\r\n"
+        ),
+    )
+    mail = gmail.fetch_full(db, "gid-1")
+    assert mail.body == "כל ההוצאות ששלחנו אליכם בפנים??"
+    assert mail.quoted_removed is True
 
 
 def test_a_forwarded_mail_keeps_its_content(db, monkeypatch):
