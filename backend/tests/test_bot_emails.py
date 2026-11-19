@@ -272,7 +272,20 @@ def test_a_long_list_is_split_into_several_messages(db, connected, monkeypatch):
 
     בלי הפיצול סוף הרשימה היה נאבד בשקט, יחד עם המספרים הגבוהים.
     """
-    many = [mail(index, sender=f"שולח ארוך למדי מספר {index}") for index in range(1, 46)]
+    # נושא באורך של פרסומת אמיתית, כי שם ההבדל נמצא: 45 מיילים עם נושא
+    # קצר נכנסים בהודעה אחת, ועם נושא אמיתי הם חורגים
+    many = [
+        gmail.EmailSummary(
+            id=f"gid-{index}",
+            thread_id=f"th-{index}",
+            sender_name=f"שולח מספר {index}",
+            sender_email=f"s{index}@example.com",
+            subject="נושא ארוך כמו של פרסומת אמיתית, עם הבטחה גדולה ועוד פסיק " * 2,
+            snippet="",
+            received_at=datetime(2026, 11, 19, 9, 0, tzinfo=IL),
+        )
+        for index in range(1, 46)
+    ]
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: many)
     outcome = actions.execute(db, Intent(action="list_emails", email_show_all=True))
     assert len(outcome.parts) > 1
