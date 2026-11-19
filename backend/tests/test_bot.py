@@ -178,9 +178,12 @@ def test_the_email_fields_are_not_unions():
         prop = INTENT_SCHEMA["properties"][name]
         assert "anyOf" not in prop, name
         assert prop["type"] == "string", name
+    # ‏email_show_all בוליאני, ולכן גם הוא אינו נוגע במונה
+    assert INTENT_SCHEMA["properties"]["email_show_all"]["type"] == "boolean"
     assert "" in INTENT_SCHEMA["properties"]["email_scope"]["enum"]
     assert Intent(action="list_emails").email_scope == ""
     assert Intent(action="list_emails").email_query == ""
+    assert Intent(action="list_emails").email_show_all is False
 
 
 def test_the_email_actions_reach_their_handlers():

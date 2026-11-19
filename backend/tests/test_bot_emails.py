@@ -195,8 +195,7 @@ def test_filtered_mail_is_counted_and_not_hidden_silently(db, connected, monkeyp
     assert outcome.listed_email_ids == ["gid-1"]
 
 
-def test_when_nothing_passes_the_filter_the_count_is_still_reported(db, connected, monkeypatch):
-    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2)])
+def reject_all(monkeypatch):
     monkeypatch.setattr(
         gmail,
         "triage",
@@ -204,9 +203,100 @@ def test_when_nothing_passes_the_filter_the_count_is_still_reported(db, connecte
             gmail.Triaged(email=item, relevant=False, line="פרסומת") for item in found
         ],
     )
+
+
+def test_when_nothing_passes_the_filter_the_count_is_still_reported(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2)])
+    reject_all(monkeypatch)
     outcome = actions.execute(db, Intent(action="list_emails"))
     assert "נכנסו היום 2 מיילים" in outcome.reply
     assert "לא נראה דורש תשומת לב" in outcome.reply
+
+
+# --- "תראה לי את כולם": הדרך לראות את מה שסוננו ---
+
+
+def test_nothing_passed_tells_the_user_how_to_see_them(db, connected, monkeypatch):
+    """⚠️ הפער שהמשתמש גילה בשימוש הראשון, 19.11.2026.
+
+    ההכרעה שהוא בחר אמרה "אתה יודע שהיה שם משהו **ויכול לבקש לראות**",
+    והיכולת לבקש לא נבנתה: הוא כתב "תראה לי את כולם בכל זאת" וקיבל שוב
+    את אותה תשובה בדיוק.
+    """
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1)])
+    reject_all(monkeypatch)
+    assert 'תראה לי את כולם' in actions.execute(db, Intent(action="list_emails")).reply
+
+
+def test_the_counter_line_also_tells_the_user_how_to_see_them(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2)])
+    monkeypatch.setattr(
+        gmail,
+        "triage",
+        lambda found, client_emails=None: [
+            gmail.Triaged(email=item, relevant=index == 1, line="שורה")
+            for index, item in enumerate(found, start=1)
+        ],
+    )
+    reply = actions.execute(db, Intent(action="list_emails")).reply
+    assert "(ועוד 1 סוננו)" in reply
+    assert 'תראה לי את כולם' in reply
+
+
+def test_show_all_skips_the_filter_entirely(db, connected, monkeypatch):
+    """הסינון הוא שירות, לא שוער. ⚠️ ואינו נקרא בכלל — גם חיסכון."""
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2), mail(3)])
+    monkeypatch.setattr(gmail, "triage", lambda *a, **k: pytest.fail("אין לסנן כאן"))
+    outcome = actions.execute(db, Intent(action="list_emails", email_show_all=True))
+    assert "נכנסו היום 3 מיילים, הכול" in outcome.reply
+    assert outcome.listed_email_ids == ["gid-1", "gid-2", "gid-3"]
+
+
+def test_show_all_numbers_everything_so_a_filtered_mail_can_be_opened(db, connected, monkeypatch):
+    """אחרי "תראה לי את כולם", "תראה לי את 3" חייב להגיע למייל שסונן."""
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2), mail(3)])
+    actions.execute(db, Intent(action="list_emails", email_show_all=True))
+    listed(db, ["gid-1", "gid-2", "gid-3"])
+    seen: dict = {}
+
+    def capture(db_, message_id):
+        seen["id"] = message_id
+        return full(3)
+
+    monkeypatch.setattr(gmail, "fetch_full", capture)
+    actions.execute(db, Intent(action="show_email", task_number=3))
+    assert seen["id"] == "gid-3"
+
+
+def test_show_all_on_an_empty_inbox_still_says_there_is_nothing(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [])
+    outcome = actions.execute(db, Intent(action="list_emails", email_show_all=True))
+    assert "אין מיילים חדשים היום" in outcome.reply
+
+
+# --- עברית: "מייל אחד" ולא "1 מיילים" ---
+
+
+def test_a_single_mail_is_counted_in_hebrew(db, connected, monkeypatch):
+    """נראה בתשובה אמיתית: "נכנסו היום 1 מיילים"."""
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1)])
+    no_filter(monkeypatch)
+    reply = actions.execute(db, Intent(action="list_emails")).reply
+    assert "נכנס היום מייל אחד" in reply
+    assert "1 מיילים" not in reply
+
+
+def test_a_single_filtered_mail_is_counted_in_hebrew(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1)])
+    reject_all(monkeypatch)
+    reply = actions.execute(db, Intent(action="list_emails")).reply
+    assert "נכנס היום מייל אחד, והוא לא נראה דורש תשומת לב" in reply
+
+
+def test_a_single_search_hit_is_counted_in_hebrew(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "search", lambda *a, **k: [mail(1)])
+    reply = actions.execute(db, Intent(action="search_emails", email_query="דני")).reply
+    assert 'מצאתי מייל אחד על "דני"' in reply
 
 
 def test_the_client_addresses_are_handed_to_the_filter(db, connected, monkeypatch):

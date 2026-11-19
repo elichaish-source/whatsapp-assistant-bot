@@ -95,6 +95,9 @@ class Intent(BaseModel):
     email_query: str = ""
     # list_emails: הטווח. "" הוא היום, כברירת מחדל
     email_scope: Literal["", "today", "week"] = ""
+    # list_emails: להציג גם את מה שהסינון דחה. בוליאני ולא איחוד, ולכן
+    # גם הוא אינו נוגע במונה — בדיוק כמו requires_client
+    email_show_all: bool = False
     # clarify
     question: str | None = None
 
@@ -201,6 +204,7 @@ INTENT_SCHEMA: dict = {
         # נשאר 15 מתוך 16, בדיוק כמו ש-active ו-sql עשו לפניהם
         "email_query": {"type": "string"},
         "email_scope": {"type": "string", "enum": ["", "today", "week"]},
+        "email_show_all": {"type": "boolean"},
     },
     "required": [
         "action",
@@ -233,6 +237,7 @@ INTENT_SCHEMA: dict = {
         "requires_client",
         "email_query",
         "email_scope",
+        "email_show_all",
     ],
 }
 
@@ -308,6 +313,10 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
 - list_emails: המשתמש רוצה לדעת מה נכנס לתיבת המייל. "מה נכנס היום",
   "מה יש במייל", "מיילים חדשים", "מה קיבלתי". ב-email_scope כתוב "week"
   רק אם ביקש במפורש טווח של כמה ימים ("מה נכנס השבוע", "מהשבוע"), ואחרת "".
+  ‏email_show_all הוא true כשהמשתמש רוצה לראות **גם את מה שסוננו**: "תראה
+  לי את כולם", "תראה הכול", "גם את מה שסוננו", "בכל זאת", "תראה לי אותם" —
+  בייחוד כשההודעה שלך לפניו אמרה שמיילים סוננו או שאף אחד לא נראה דורש
+  תשומת לב. ואחרת false.
 - search_emails: המשתמש מחפש מייל מסוים בתיבה. "מה כתב לי דני", "תמצא את
   המייל על החוזה", "יש מייל מרואה החשבון?". ב-email_query כתוב את מילות
   החיפוש בלבד — שם השולח או נושא, בלי "תמצא", בלי "המייל" ובלי "מה כתב לי".
@@ -397,9 +406,9 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   לי להתקשר אליו"), בצע את הראשונה בלבד.
 - כל שדה שאינו רלוונטי לפעולה שבחרת — null. יש שדות שבהם אין null לעולם:
   repeat_unit הוא "none" בכל פעולה שאינה add_recurring, ‏repeat_count,
-  ‏lead_days ו-family_id הם 0, ‏requires_client הוא false, ו-sql, ‏name,
-  ‏phone, ‏email, ‏tax_id, ‏address, ‏active, ‏email_query ו-email_scope הם
-  מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
+  ‏lead_days ו-family_id הם 0, ‏requires_client ו-email_show_all הם false,
+  ו-sql, ‏name, ‏phone, ‏email, ‏tax_id, ‏address, ‏active, ‏email_query
+  ו-email_scope הם מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
 
 
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{queries.SCHEMA_DOC}"

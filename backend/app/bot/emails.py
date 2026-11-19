@@ -75,6 +75,21 @@ def _listed(items: list[gmail.EmailSummary]) -> list[str]:
     return [item.id for item in items]
 
 
+def _count(number: int) -> str:
+    """"מייל אחד" ולא "1 מיילים". נראה בתשובה אמיתית ב-19.11.2026."""
+    return "מייל אחד" if number == 1 else f"{number} מיילים"
+
+
+def _arrived(number: int, span: str) -> str:
+    return f"נכנס {span} מייל אחד" if number == 1 else f"נכנסו {span} {number} מיילים"
+
+
+# ⚠️ ההכרעה שהמשתמש בחר אמרה במפורש "אתה יודע שהיה שם משהו **ויכול
+# לבקש לראות**". היכולת לבקש לא נבנתה, והמשתמש גילה את זה בשימוש
+# הראשון: הוא כתב "תראה לי את כולם בכל זאת" וקיבל שוב את אותה תשובה.
+SHOW_ALL = 'לראות גם את מה שסוננו — כתוב "תראה לי את כולם".'
+
+
 def _hint(count: int) -> str:
     """ההנחיה לקריאת מייל, עם מספר שקיים באמת ברשימה.
 
@@ -111,23 +126,34 @@ def list_emails(db: Session, intent: Intent) -> Outcome:
         # משימות אינו רלוונטי יותר
         return Outcome(f"אין מיילים חדשים {span}.", clear_list=True)
 
+    # "תראה לי את כולם" — בלי סינון בכלל. הסינון הוא שירות, לא שוער
+    if intent.email_show_all:
+        lines = {item.id: item.snippet for item in found}
+        body = f"{_arrived(len(found), span)}, הכול:\n\n{_format(found, lines)}"
+        return Outcome(
+            body + _hint(len(found)), listed_email_ids=_listed(found), clear_list=True
+        )
+
     verdicts = gmail.triage(found, gmail.client_addresses(db))
     passed = [item for item in verdicts if item.relevant]
     filtered = len(verdicts) - len(passed)
 
     if not passed:
+        nothing = "והוא לא נראה" if filtered == 1 else "ואף אחד מהם לא נראה"
         return Outcome(
-            f"נכנסו {span} {filtered} מיילים, ואף אחד מהם לא נראה דורש תשומת לב.",
+            f"{_arrived(filtered, span)}, {nothing} דורש תשומת לב.\n{SHOW_ALL}",
             clear_list=True,
         )
 
     items = [item.email for item in passed]
     lines = {item.email.id: item.line for item in passed}
-    heading = f"נכנסו {span} {len(items)} מיילים"
+    heading = _arrived(len(items), span)
     if filtered:
         heading += f" (ועוד {filtered} סוננו)"
 
     body = f"{heading}:\n\n{_format(items, lines)}" + _hint(len(items))
+    if filtered:
+        body += f"\n{SHOW_ALL}"
     return Outcome(body, listed_email_ids=_listed(items), clear_list=True)
 
 
@@ -158,7 +184,7 @@ def search_emails(db: Session, intent: Intent) -> Outcome:
     if not found:
         return Outcome(f'לא מצאתי מייל שמתאים ל"{text}".', clear_list=True)
 
-    body = f'מצאתי {len(found)} מיילים על "{text}":\n\n'
+    body = f'מצאתי {_count(len(found))} על "{text}":\n\n'
     # בחיפוש מוצג גם הנושא: בלי מסגרת של "מה נכנס היום" הוא מה שמאפשר
     # לזהות שזה המייל הנכון
     blocks = []
