@@ -27,6 +27,7 @@ import html
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.header import decode_header, make_header
@@ -666,18 +667,43 @@ def _triage_block(emails: list[EmailSummary]) -> str:
     return "\n".join(lines)
 
 
+# כמה מיילים בקריאה אחת למודל. ⚠️ **החלוקה אינה אופטימיזציה אלא בידוד
+# כשלים:** קריאה אחת על כל הרשימה היא הכול-או-כלום, ותקלה אחת בה מחזירה
+# מסך שבו כל מייל "חשוב". עם חלוקה, כשל נוגע למנה אחת בלבד, והשאר מסווג.
+TRIAGE_BATCH = 20
+# כמה מנות רצות במקביל. המסך ממתין להן, ולכן טורי היה אומר חמש קריאות
+# זו אחר זו על חודש שלם
+TRIAGE_WORKERS = 4
+
+
+def _triage_tokens(count: int) -> int:
+    """תקרת הפלט למנה, לפי מספר המיילים בה.
+
+    ‏200 לפריט הם מרווח נדיב: שורה בעברית היא כ-40 טוקנים, ומעטפת
+    ה-JSON עוד כ-15. המרווח זול — טוקנים שלא נכתבו אינם בתשלום — ואילו
+    חיתוך באמצע ה-JSON מפיל את הסינון כולו.
+    """
+    return 1024 + 200 * max(count, 1)
+
+
 def _ask_haiku(emails: list[EmailSummary]) -> dict[int, tuple[bool, str]]:
     """קריאה אחת ל-Haiku על הרשימה. מחזיר מילון לפי המספר ברשימה.
 
     זורק את החריגות של anthropic כדי שהקורא יחליט מה לעשות בכשל.
+
+    ⚠️⚠️ **``max_tokens`` נגזר מאורך הרשימה, ואינו קבוע.** ‏2048 קבועים
+    הספיקו לבוט, שסינן כמה מיילים שלא נקראו, ונחתכו באמצע ה-JSON בפעם
+    הראשונה שהמסך שלח 19 מיילים: ``json.loads`` נפל, הסינון כולו נכשל,
+    וכל מייל בתיבה הוצג כ"חשוב" — כולל מה שכתוב עליו "(פרסומת)".
+    זה לא נתפס באף בדיקה, כי אף בדיקה אינה קוראת למודל.
     """
     import anthropic
 
     settings = get_settings()
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
     response = client.messages.create(
         model=settings.claude_haiku_model,
-        max_tokens=2048,
+        max_tokens=_triage_tokens(len(emails)),
         system=[{"type": "text", "text": TRIAGE_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": f"המיילים:\n{_triage_block(emails)}"}],
         output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
@@ -716,25 +742,46 @@ def triage(emails: list[EmailSummary], client_emails: set[str] | None = None) ->
         else:
             cached[item.id] = hit
 
-    verdicts: dict[int, tuple[bool, str]] = {}
+    by_id: dict[str, tuple[bool, str]] = {}
     if fresh:
-        settings = get_settings()
-        if not settings.anthropic_api_key:
+        if not get_settings().anthropic_api_key:
             log.warning("סינון מיילים דולג: ANTHROPIC_API_KEY לא מוגדר")
             return _merge(emails, cached, {}, forced, store=False)
-        try:
-            verdicts = _ask_haiku(fresh)
-        except Exception as exc:  # noqa: BLE001 - כשל סינון אינו מפיל את הבקשה
-            log.warning("סינון המיילים נכשל: %s", exc)
-            return _merge(emails, cached, {}, forced, store=False)
+        by_id = _ask_in_batches(fresh)
 
-    # המספרים ש-Haiku החזיר מתייחסים ל-fresh, ולא לרשימה המלאה
-    by_id = {
-        item.id: verdicts[index]
-        for index, item in enumerate(fresh, start=1)
-        if index in verdicts
-    }
     return _merge(emails, cached, by_id, forced, store=True)
+
+
+def _ask_in_batches(fresh: list[EmailSummary]) -> dict[str, tuple[bool, str]]:
+    """מסווג את המיילים במנות מקבילות, ומחזיר תוצאה לפי מזהה.
+
+    ⚠️ **מנה שנכשלה אינה מפילה את השאר.** המיילים שבה פשוט אינם בתוצאה,
+    ו-``_merge`` יציג אותם כ"חשוב" בלי לשמור במטמון — כך שהניסיון הבא
+    יסווג אותם. הכיוון הזה מכוון: מייל שנעלם בשקט הוא הכשל היחיד שאסור.
+    """
+    batches = [fresh[at : at + TRIAGE_BATCH] for at in range(0, len(fresh), TRIAGE_BATCH)]
+
+    def run(batch: list[EmailSummary]) -> dict[str, tuple[bool, str]]:
+        try:
+            verdicts = _ask_haiku(batch)
+        except Exception as exc:  # noqa: BLE001 - כשל סינון אינו מפיל את הבקשה
+            log.warning("סינון מנה של %d מיילים נכשל: %s", len(batch), exc)
+            return {}
+        # המספרים שהמודל החזיר מתייחסים למנה, ולא לרשימה המלאה
+        return {
+            item.id: verdicts[index]
+            for index, item in enumerate(batch, start=1)
+            if index in verdicts
+        }
+
+    if len(batches) == 1:
+        return run(batches[0])
+
+    found: dict[str, tuple[bool, str]] = {}
+    with ThreadPoolExecutor(max_workers=TRIAGE_WORKERS) as pool:
+        for part in pool.map(run, batches):
+            found.update(part)
+    return found
 
 
 def _merge(
