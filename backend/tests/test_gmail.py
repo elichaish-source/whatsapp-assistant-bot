@@ -774,10 +774,20 @@ def test_the_triage_block_carries_the_sender_subject_and_snippet():
 
 
 def test_the_output_cap_grows_with_the_list():
-    """⚠️ 2048 קבועים הם מה שחתך את התשובה באמצע ה-JSON."""
+    """⚠️ 2048 קבועים הם מה שחתך את התשובה באמצע ה-JSON.
+
+    ⚠️ **המרווח נבדק לפריט ולא כסכום.** בגרסה הראשונה נכתב כאן רף מוחלט
+    של 4,000 טוקנים, והוא נשבר ברגע ש-``TRIAGE_BATCH`` ירד מ-20 ל-6 —
+    אף שהמרווח האמיתי לא השתנה כלל. רף שתלוי בקבוע אחר בודק את הקבוע,
+    לא את הכלל.
+    """
     assert gmail._triage_tokens(20) > gmail._triage_tokens(5)
-    # מרווח אמיתי לשורה בעברית בכל מייל, ולא תקרה שמספיקה בקושי
-    assert gmail._triage_tokens(gmail.TRIAGE_BATCH) >= 4000
+    # פריט אחד בתשובה הוא כ-60 טוקנים: שורה בעברית ומעטפת JSON.
+    # התוספת לכל פריט חייבת להיות גדולה מזה בהרבה, ולא להספיק בקושי
+    per_item = gmail._triage_tokens(21) - gmail._triage_tokens(20)
+    assert per_item >= 150
+    # וגם למנה מלאה יש בסיס קבוע מעבר לסכום הפריטים
+    assert gmail._triage_tokens(gmail.TRIAGE_BATCH) >= 60 * gmail.TRIAGE_BATCH * 3
 
 
 def test_the_cap_sent_to_the_model_matches_the_batch(monkeypatch):
