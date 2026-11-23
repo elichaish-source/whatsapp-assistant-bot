@@ -106,6 +106,37 @@ def list_emails(
     )
 
 
+@router.post("/{message_id}/archive")
+def archive_email(message_id: str, db: Session = Depends(get_db)) -> dict:
+    """מוציא מייל מהדואר הנכנס (שלב 4-4).
+
+    ⚠️ **אינו מוחק דבר**, ולכן אינו דורש אישור: המייל נשאר בתיבה, נמצא
+    בחיפוש, ו-``/unarchive`` מחזיר אותו. זאת הסיבה שהכפתור פועל מיד
+    ובלי שאלה, ושהביטול הוא כפתור ולא תקווה.
+    """
+    return _write(db, gmail.archive, message_id)
+
+
+@router.post("/{message_id}/unarchive")
+def unarchive_email(message_id: str, db: Session = Depends(get_db)) -> dict:
+    """מחזיר מייל לדואר הנכנס. הביטול של הארכוב."""
+    return _write(db, gmail.unarchive, message_id)
+
+
+def _write(db: Session, action, message_id: str) -> dict:
+    """הכתיבות אל התיבה חולקות את אותו טיפול בשגיאות כמו הקריאות."""
+    _require_connection(db)
+    try:
+        action(db, message_id)
+    except gauth.GoogleDisconnected as exc:
+        log.warning("החיבור לגוגל נפסל באמצע שינוי תוויות: %s", exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DISCONNECTED) from exc
+    except (gmail.GmailError, gauth.GoogleError) as exc:
+        log.warning("שינוי תוויות נכשל: %s", exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+    return {"ok": True}
+
+
 @router.get("/{message_id}", response_model=EmailBodyOut)
 def read_email(message_id: str, db: Session = Depends(get_db)) -> EmailBodyOut:
     """המייל המלא לקריאה, בלי ההיסטוריה המצוטטת.

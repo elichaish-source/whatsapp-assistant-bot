@@ -19,6 +19,10 @@ export default function Mail() {
   const [open, setOpen] = useState<MailBody | null>(null);
   const [opening, setOpening] = useState<MailItem | null>(null);
   const [openError, setOpenError] = useState("");
+  // המייל שהרגע אורכב, לכפתור הביטול. ⚠️ נשמר בזיכרון המסך בלבד —
+  // רענון מאבד את הביטול, והמייל נשאר בארכיון ולא נמחק
+  const [undo, setUndo] = useState<MailItem | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,6 +59,58 @@ export default function Mail() {
     setOpening(null);
     setOpen(null);
     setOpenError("");
+  };
+
+  /** מסיר שורה מהתצוגה ומתקן את המונים, בלי לפנות שוב לגוגל */
+  const drop = (item: MailItem, removed: boolean) =>
+    setList((current) => {
+      if (!current) return current;
+      const items = removed
+        ? current.items.filter((row) => row.id !== item.id)
+        : [...current.items, item].sort((a, b) => b.received_at.localeCompare(a.received_at));
+      const step = removed ? -1 : 1;
+      return {
+        ...current,
+        items,
+        important: current.important + (item.important ? step : 0),
+        other: current.other + (item.important ? 0 : step),
+      };
+    });
+
+  /**
+   * ארכוב. ⚠️ אינו מוחק: המייל יוצא מהדואר הנכנס, נשאר בתיבה, ונמצא
+   * בחיפוש. לכן אין כאן שאלת אישור — יש כפתור ביטול.
+   */
+  const archive = async (item: MailItem) => {
+    setBusy(item.id);
+    setError("");
+    drop(item, true);
+    closeRead();
+    try {
+      await api(`/emails/${encodeURIComponent(item.id)}/archive`, { method: "POST" });
+      setUndo(item);
+    } catch (e) {
+      // נכשל — השורה חוזרת, אחרת המסך היה משקר על מה שבתיבה
+      drop(item, false);
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const undoArchive = async () => {
+    if (!undo) return;
+    const item = undo;
+    setUndo(null);
+    setBusy(item.id);
+    try {
+      await api(`/emails/${encodeURIComponent(item.id)}/unarchive`, { method: "POST" });
+      drop(item, false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const items = (list?.items ?? []).filter(
@@ -110,6 +166,22 @@ export default function Mail() {
           </button>
         ))}
       </div>
+
+      {/* הביטול יושב מעל הרשימה ולא נעלם מעצמו: מי שארכב בטעות צריך
+          למצוא אותו, ולא להספיק ללחוץ בתוך חמש שניות */}
+      {undo && (
+        <div className="card mail-undo">
+          <span>
+            «{undo.subject}» הועבר לארכיון. הוא לא נמחק — נשאר בתיבה ונמצא בחיפוש.
+          </span>
+          <button onClick={undoArchive} disabled={busy === undo.id}>
+            ביטול
+          </button>
+          <button className="link-btn" onClick={() => setUndo(null)}>
+            סגור
+          </button>
+        </div>
+      )}
 
       {needsConnection ? (
         <div className="card">
@@ -181,6 +253,17 @@ export default function Mail() {
                 </div>
                 <div className="mail-subject">{item.subject}</div>
                 {item.line && <div className="muted clamp">{item.line}</div>}
+                {/* מחוץ לאזור הלחיצה שפותח את המייל, אחרת ארכוב היה
+                    פותח אותו באותה לחיצה */}
+                <div className="mail-actions" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="link-btn"
+                    disabled={busy === item.id}
+                    onClick={() => archive(item)}
+                  >
+                    ארכוב
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -218,6 +301,11 @@ export default function Mail() {
                   ההיסטוריה המצוטטת בסוף המייל הושמטה. היא נמצאת בג׳ימייל.
                 </p>
               )}
+              <div className="actions">
+                <button disabled={busy === opening.id} onClick={() => archive(opening)}>
+                  ארכוב
+                </button>
+              </div>
             </div>
           )}
         </Modal>

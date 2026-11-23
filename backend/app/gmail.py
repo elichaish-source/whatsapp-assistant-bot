@@ -220,6 +220,52 @@ def _get(db: Session, path: str, params: dict | None = None) -> dict:
     return _request(gauth.access_token(db), path, params)
 
 
+# ⚠️⚠️ **התווית היחידה שמותר לשנות, והשינוי היחיד שמותר לעשות.**
+# הוצאה מהדואר הנכנס היא ארכוב, והיא הפיכה לגמרי: המייל נשאר בתיבה
+# ונמצא בחיפוש. ‏``TRASH`` ומחיקה לצמיתות אינם נעשים כאן לעולם, ויש
+# בדיקה שתיפול אם מישהו יוסיף אותם
+INBOX_LABEL = "INBOX"
+
+
+def _modify(db: Session, message_id: str, payload: dict) -> None:
+    """שינוי תוויות של מייל אחד. ⚠️ **הכתיבה היחידה אל התיבה.**
+
+    ‏``users.messages.modify`` ולא ``trash`` ולא ``delete``: הראשון מזיז
+    את המייל בין תצוגות, והאחרים מוציאים אותו מהישג יד. ההרשאה
+    ‏``gmail.modify`` שבידינו אינה מאפשרת מחיקה לצמיתות ממילא.
+    """
+    token = gauth.access_token(db)
+    try:
+        response = httpx.post(
+            f"{API}/messages/{message_id}/modify",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise GmailError(f"הפנייה לגוגל נכשלה: {exc}") from exc
+
+    if response.status_code == 404:
+        raise GmailError("המייל לא נמצא בתיבה")
+    if response.status_code >= 400:
+        log.warning("גוגל החזירה %s על שינוי תוויות", response.status_code)
+        raise GmailError(f"גוגל החזירה {response.status_code}")
+
+
+def archive(db: Session, message_id: str) -> None:
+    """מוציא מייל מהדואר הנכנס.
+
+    ⚠️ **אינו מוחק דבר.** המייל נשאר בתיבה, נמצא בחיפוש, ו-``unarchive``
+    מחזיר אותו בדיוק למקום שממנו יצא. זה מה שמאפשר כפתור "ביטול" אמיתי.
+    """
+    _modify(db, message_id, {"removeLabelIds": [INBOX_LABEL]})
+
+
+def unarchive(db: Session, message_id: str) -> None:
+    """מחזיר מייל לדואר הנכנס. הביטול של ``archive``."""
+    _modify(db, message_id, {"addLabelIds": [INBOX_LABEL]})
+
+
 def _message_ids(db: Session, query: str, limit: int) -> list[str]:
     data = _get(db, "messages", {"q": query, "maxResults": limit})
     return [str(item["id"]) for item in data.get("messages") or [] if item.get("id")]
