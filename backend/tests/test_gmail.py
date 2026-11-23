@@ -763,3 +763,108 @@ def test_the_triage_block_carries_the_sender_subject_and_snippet():
     assert "דני כהן" in block
     assert "נושא 1" in block
     assert "פתיחה 1" in block
+
+
+# --- חלוקת הסינון למנות ---
+#
+# ⚠️⚠️ הבאג שהבדיקות האלה נולדו ממנו, 23.11.2026: המסך שלח 19 מיילים,
+# ‏max_tokens היה 2048 קבוע, התשובה נחתכה באמצע ה-JSON, json.loads נפל,
+# והמסך הציג את כל 19 כ"חשוב" — כולל מיילים שכתוב עליהם "(פרסומת)".
+# ‏EXIT=0 ו-509 בדיקות עברו באותו רגע, כי אף בדיקה אינה קוראת למודל.
+
+
+def test_the_output_cap_grows_with_the_list():
+    """⚠️ 2048 קבועים הם מה שחתך את התשובה באמצע ה-JSON."""
+    assert gmail._triage_tokens(20) > gmail._triage_tokens(5)
+    # מרווח אמיתי לשורה בעברית בכל מייל, ולא תקרה שמספיקה בקושי
+    assert gmail._triage_tokens(gmail.TRIAGE_BATCH) >= 4000
+
+
+def test_the_cap_sent_to_the_model_matches_the_batch(monkeypatch):
+    captured: dict = {}
+    fake_anthropic(monkeypatch, '{"items": []}', captured)
+    gmail.triage([summary(number) for number in range(5)])
+    assert captured["max_tokens"] == gmail._triage_tokens(5)
+
+
+def test_a_long_list_is_split_into_batches(monkeypatch):
+    """רשימה ארוכה אינה נשלחת בקריאה אחת, שהתשובה עליה תיחתך."""
+    sizes: list[int] = []
+
+    def counted(emails):
+        sizes.append(len(emails))
+        return {index: (True, "שורה") for index, _ in enumerate(emails, start=1)}
+
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", counted)
+
+    count = gmail.TRIAGE_BATCH * 2 + 3
+    result = gmail.triage([summary(number) for number in range(count)])
+    assert len(result) == count
+    assert sum(sizes) == count
+    assert max(sizes) <= gmail.TRIAGE_BATCH
+
+
+def test_a_short_list_stays_one_call(monkeypatch):
+    calls: list[int] = []
+
+    def counted(emails):
+        calls.append(len(emails))
+        return {}
+
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", counted)
+    gmail.triage([summary(number) for number in range(3)])
+    assert calls == [3]
+
+
+def test_every_mail_keeps_its_own_verdict_across_batches(monkeypatch):
+    """⚠️ המספור של המודל הוא בתוך המנה. ערבוב בין מנות היה מדביק
+    למייל אחד את התיאור של אחר — כשל גרוע משגיאה, כי הוא נראה תקין."""
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    # הראשון בכל מנה נדחה, השאר עוברים
+    monkeypatch.setattr(
+        gmail,
+        "_ask_haiku",
+        lambda emails: {
+            index: (index != 1, f"שורה של {item.id}")
+            for index, item in enumerate(emails, start=1)
+        },
+    )
+    count = gmail.TRIAGE_BATCH + 2
+    result = gmail.triage([summary(number) for number in range(count)])
+    for item in result:
+        assert item.line == f"שורה של {item.email.id}"
+    # בדיוק שניים נדחו: הראשון בכל אחת משתי המנות
+    assert [item.relevant for item in result].count(False) == 2
+
+
+def test_one_failed_batch_does_not_lose_the_others(monkeypatch):
+    """⚠️ זה מה שהפך תקלה אחת למסך שבו כל מייל "חשוב"."""
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+
+    def flaky(emails):
+        if any(item.id == "id-0" for item in emails):
+            raise ValueError("התשובה נחתכה")
+        return {index: (False, "פרסומת") for index, _ in enumerate(emails, start=1)}
+
+    monkeypatch.setattr(gmail, "_ask_haiku", flaky)
+    count = gmail.TRIAGE_BATCH + 2
+    result = gmail.triage([summary(number) for number in range(count)])
+    # המנה הראשונה נכשלה ולכן הוצגה, והשנייה סווגה
+    assert [item.relevant for item in result[: gmail.TRIAGE_BATCH]] == [True] * gmail.TRIAGE_BATCH
+    assert [item.relevant for item in result[gmail.TRIAGE_BATCH :]] == [False, False]
+
+
+def test_the_mails_of_a_failed_batch_are_not_cached(monkeypatch):
+    """המנה שנכשלה חייבת להישאל שוב, ולא להיתקע על "הכול חשוב" לחצי שעה."""
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+
+    def boom(emails):
+        raise ValueError("התשובה נחתכה")
+
+    monkeypatch.setattr(gmail, "_ask_haiku", boom)
+    assert gmail.triage([summary(1)])[0].relevant is True
+
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    assert gmail.triage([summary(1)])[0].relevant is False
