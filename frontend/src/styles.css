@@ -731,3 +731,19 @@ pre {
 .when-tabs button .badge {
   margin-inline-start: 6px;
 }
+
+/* ⚠️ המונה בלשונית הלחוצה היה אפור על רקע ירוק ולא נקרא כלל: ‏`.badge`
+   קובע `color: var(--muted)` ומסגרת בצבע הגבול, ושניהם נועדו לרקע לבן.
+   בלשונית פעילה הוא לובש את צבע הטקסט של הכפתור, על רקע שקוף-למחצה
+   שמבדיל אותו מהתווית בלי להסתמך על הבדל גוון */
+.when-tabs button.on .badge {
+  color: inherit;
+  font-weight: 600;
+  /* ברירת מחדל שעובדת בכל דפדפן, וגם במצב כהה שבו טקסט הלשונית כהה
+     על רקע בהיר: המסגרת פשוט לובשת את צבע הטקסט */
+  border-color: currentColor;
+  /* ועידון למי שתומך: מסגרת רכה יותר ורקע שקוף-למחצה. אם הדפדפן אינו
+     מכיר color-mix הוא מתעלם משתי השורות, והמונה נשאר קריא */
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}

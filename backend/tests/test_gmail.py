@@ -774,10 +774,20 @@ def test_the_triage_block_carries_the_sender_subject_and_snippet():
 
 
 def test_the_output_cap_grows_with_the_list():
-    """⚠️ 2048 קבועים הם מה שחתך את התשובה באמצע ה-JSON."""
+    """⚠️ 2048 קבועים הם מה שחתך את התשובה באמצע ה-JSON.
+
+    ⚠️ **המרווח נבדק לפריט ולא כסכום.** בגרסה הראשונה נכתב כאן רף מוחלט
+    של 4,000 טוקנים, והוא נשבר ברגע ש-``TRIAGE_BATCH`` ירד מ-20 ל-6 —
+    אף שהמרווח האמיתי לא השתנה כלל. רף שתלוי בקבוע אחר בודק את הקבוע,
+    לא את הכלל.
+    """
     assert gmail._triage_tokens(20) > gmail._triage_tokens(5)
-    # מרווח אמיתי לשורה בעברית בכל מייל, ולא תקרה שמספיקה בקושי
-    assert gmail._triage_tokens(gmail.TRIAGE_BATCH) >= 4000
+    # פריט אחד בתשובה הוא כ-60 טוקנים: שורה בעברית ומעטפת JSON.
+    # התוספת לכל פריט חייבת להיות גדולה מזה בהרבה, ולא להספיק בקושי
+    per_item = gmail._triage_tokens(21) - gmail._triage_tokens(20)
+    assert per_item >= 150
+    # וגם למנה מלאה יש בסיס קבוע מעבר לסכום הפריטים
+    assert gmail._triage_tokens(gmail.TRIAGE_BATCH) >= 60 * gmail.TRIAGE_BATCH * 3
 
 
 def test_the_cap_sent_to_the_model_matches_the_batch(monkeypatch):
@@ -1011,3 +1021,99 @@ def test_the_prompt_says_a_bad_number_makes_a_report_relevant():
     assert "יתרה שלילית" in gmail.TRIAGE_PROMPT
     # והדוגמה הגורפת הישנה אינה שם יותר
     assert "התראת מערכת אוטומטית" not in gmail.TRIAGE_PROMPT
+
+
+# --- שליפת הכותרות במקביל ---
+#
+# ⚠️ נמדד מול התיבה האמיתית ב-24.11.2026: 14 מיילים לקחו 3.2 שניות,
+# כי גוגל מחזירה כותרת אחת בכל קריאה והשליפה הייתה סדרתית.
+
+
+def test_the_headers_are_fetched_in_parallel(db, monkeypatch):
+    """הראיה שהשליפה מקבילה: כל הקריאות נכנסות לפני שהראשונה חוזרת."""
+    import threading
+
+    started = threading.Semaphore(0)
+    release = threading.Event()
+    count = 5
+
+    def slow(token, path, params=None):
+        started.release()
+        # משתחרר רק אחרי שכל הקריאות כבר בפנים. בשליפה סדרתית הראשונה
+        # הייתה נתקעת כאן לנצח, והבדיקה הייתה נכשלת בתום הזמן
+        assert release.wait(timeout=5), "השליפה אינה מקבילה"
+        return {"id": path.split("/")[-1], "threadId": "th", "internalDate": "1763500000000"}
+
+    monkeypatch.setattr(gmail, "_request", slow)
+    monkeypatch.setattr(gmail.gauth, "access_token", lambda db_: "tok")
+
+    ids = [f"gid-{number}" for number in range(count)]
+    done: list[list] = []
+    worker = threading.Thread(target=lambda: done.append(gmail._summaries(db, ids)))
+    worker.start()
+    for _ in range(count):
+        assert started.acquire(timeout=5), "לא כל הקריאות יצאו במקביל"
+    release.set()
+    worker.join(timeout=5)
+    assert len(done[0]) == count
+
+
+def test_the_token_is_read_once_for_the_whole_list(db, monkeypatch):
+    """⚠️ Session של SQLAlchemy אינו בטוח לשימוש מקביל, ו-access_token
+    ניגש למסד. קריאה אחת לפני התהליכונים היא גם נכונות וגם מהירות."""
+    calls = []
+    monkeypatch.setattr(gmail.gauth, "access_token", lambda db_: calls.append(1) or "tok")
+    monkeypatch.setattr(
+        gmail,
+        "_request",
+        lambda token, path, params=None: {"id": path.split("/")[-1], "internalDate": "1763500000000"},
+    )
+    gmail._summaries(db, [f"gid-{number}" for number in range(10)])
+    assert len(calls) == 1
+
+
+def test_the_parallel_fetch_keeps_the_requested_order(db, monkeypatch):
+    """הסדר חייב להישמר: הרשימה ממוינת אחר כך, אבל מיזוג לפי מיקום
+    היה מדביק למייל אחד את הכותרת של אחר."""
+    monkeypatch.setattr(gmail.gauth, "access_token", lambda db_: "tok")
+    monkeypatch.setattr(
+        gmail,
+        "_request",
+        lambda token, path, params=None: {
+            "id": path.split("/")[-1],
+            "internalDate": "1763500000000",
+            "payload": {"headers": [{"name": "Subject", "value": path.split("/")[-1]}]},
+        },
+    )
+    ids = [f"gid-{number}" for number in range(12)]
+    found = gmail._summaries(db, ids)
+    assert [item.id for item in found] == ids
+    assert [item.subject for item in found] == ids
+
+
+def test_one_failed_header_does_not_drop_the_rest(db, monkeypatch):
+    monkeypatch.setattr(gmail.gauth, "access_token", lambda db_: "tok")
+
+    def flaky(token, path, params=None):
+        if path.endswith("gid-2"):
+            raise gmail.GmailError("גוגל החזירה 500")
+        return {"id": path.split("/")[-1], "internalDate": "1763500000000"}
+
+    monkeypatch.setattr(gmail, "_request", flaky)
+    found = gmail._summaries(db, ["gid-1", "gid-2", "gid-3"])
+    assert [item.id for item in found] == ["gid-1", "gid-3"]
+
+
+def test_an_empty_list_asks_google_for_nothing(db, monkeypatch):
+    monkeypatch.setattr(
+        gmail.gauth, "access_token", lambda db_: pytest.fail("אין לפנות לגוגל על רשימה ריקה")
+    )
+    assert gmail._summaries(db, []) == []
+
+
+def test_the_triage_batch_is_small_enough_to_run_in_parallel():
+    """⚠️ נמדד: מנה של 14 מיילים ארכה 11.7 שניות, כי זמן הקריאה נגזר
+    מכמות הטקסט שהמודל כותב. מנה גדולה פירושה המתנה ארוכה למסך."""
+    assert gmail.TRIAGE_BATCH <= 8
+    # ומספיק מנות רצות יחד כדי שחלוקה תקצר באמת את ההמתנה
+    assert gmail.TRIAGE_WORKERS >= 4
