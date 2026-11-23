@@ -316,6 +316,38 @@ def test_show_all_on_an_empty_inbox_still_says_there_is_nothing(db, connected, m
     assert "אין מיילים חדשים היום" in outcome.reply
 
 
+# --- פעולה על מייל שטרם נבנתה ---
+
+
+def test_an_email_action_that_is_not_built_says_so_plainly(db, connected):
+    """⚠️ נראה בשימוש אמיתי ב-22.11.2026.
+
+    "זרוק אותו לארכיון" קיבל `unknown`, והתשובה הייתה "לא הבנתי. אפשר
+    לכתוב למשל תזכיר לי מחר ב-10 להתקשר לדני" — הפניה למשימות במקום
+    לומר שהיכולת עוד לא קיימת.
+    """
+    reply = actions.execute(db, Intent(action="email_not_yet")).reply
+    assert "ארכוב" in reply and "עוד לא נבנו" in reply
+    # ואומר מה כן אפשר, כדי שהמשתמש לא ינחש
+    assert "מה נכנס היום" in reply
+    assert "תזכיר לי" not in reply
+
+
+def test_the_not_yet_answer_does_not_promise_a_date(db, connected):
+    """טרם הוכרע אם 4-3 ו-4-4 בבוט או במסך, ואין להבטיח."""
+    reply = actions.execute(db, Intent(action="email_not_yet")).reply
+    for word in ("בקרוב", "בהמשך", "בשלב הבא", "נבנה בימים"):
+        assert word not in reply, word
+
+
+def test_the_not_yet_answer_changes_nothing(db, connected):
+    outcome = actions.execute(db, Intent(action="email_not_yet"))
+    assert outcome.listed_email_ids == []
+    assert outcome.clear_list is False
+    assert outcome.task_id is None
+    assert outcome.pending is None
+
+
 # --- עברית: "מייל אחד" ולא "1 מיילים" ---
 
 

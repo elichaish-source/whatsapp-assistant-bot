@@ -773,7 +773,7 @@ _ENTITY_ACTIONS = ("add_client", "update_client", "add_project", "update_project
 _LIST_ACTIONS = ("add_domain", "add_task_type", "pause_recurrence", "resume_recurrence")
 # קריאה מהתיבה. אינן נכללות ב-_UNDOABLE: קריאה אינה משנה דבר, ולכן
 # "בטל" אחרי רשימת מיילים צריך להמשיך אחורה למה שכן שונה
-_EMAIL_ACTIONS = ("list_emails", "search_emails", "show_email")
+_EMAIL_ACTIONS = ("list_emails", "search_emails", "show_email", "email_not_yet")
 # confirm נכלל בגלל יצירה שאושרה ("ליצור בכל זאת?" ואז "כן"). מחיקה שאושרה
 # לא משאירה אחריה מה לבטל, ולכן השורה שלה לא נמצאת בחיפוש שלמטה
 _UNDOABLE = (
