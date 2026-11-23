@@ -474,3 +474,105 @@ def test_the_warmed_scope_is_the_one_the_screen_opens_on(db, connected, monkeypa
     monkeypatch.setattr(gmail, "list_screen", spy)
     reminders.warm_mail_screen(db)
     assert seen == ["week"]
+
+
+# --- ארכוב (שלב 4-4) ---
+
+
+@pytest.fixture
+def modified(monkeypatch):
+    """תופס את מה שנשלח לגוגל, בלי לפנות אליה."""
+    calls = []
+    monkeypatch.setattr(
+        gmail, "_modify", lambda db_, mid, payload: calls.append((mid, payload))
+    )
+    return calls
+
+
+def test_archiving_removes_the_mail_from_the_inbox(client, connected, modified):
+    assert client.post("/api/emails/gid-1/archive").status_code == 200
+    assert modified == [("gid-1", {"removeLabelIds": ["INBOX"]})]
+
+
+def test_undo_puts_the_mail_back_in_the_inbox(client, connected, modified):
+    assert client.post("/api/emails/gid-1/unarchive").status_code == 200
+    assert modified == [("gid-1", {"addLabelIds": ["INBOX"]})]
+
+
+def test_archiving_never_deletes_anything(client, connected, modified):
+    """⚠️⚠️ ההבטחה המרכזית של 4-4: ארכוב מזיז, ולא מוחק.
+
+    המייל נשאר בתיבה ונמצא בחיפוש, וזה מה שמצדיק כפתור שפועל מיד בלי
+    שאלת אישור. אם מישהו יחליף את זה ב-trash או ב-delete, הבדיקה תיפול.
+    """
+    client.post("/api/emails/gid-1/archive")
+    client.post("/api/emails/gid-1/unarchive")
+    for _, payload in modified:
+        touched = payload.get("removeLabelIds", []) + payload.get("addLabelIds", [])
+        assert touched == ["INBOX"], "רק תווית הדואר הנכנס מותרת"
+        assert "TRASH" not in touched
+        assert "SPAM" not in touched
+
+
+def test_the_archive_route_never_calls_a_delete_endpoint(db, connected, monkeypatch):
+    """⚠️ גם שכבת השירות עצמה: הכתיבה היחידה היא modify."""
+    seen = []
+    monkeypatch.setattr(
+        gmail.httpx,
+        "post",
+        lambda url, **kw: seen.append(url) or _ok_response(),
+    )
+    gmail.archive(db, "gid-1")
+    gmail.unarchive(db, "gid-1")
+    assert all(url.endswith("/modify") for url in seen), seen
+    assert not any("trash" in url.lower() or "delete" in url.lower() for url in seen)
+
+
+class _ok_response:
+    status_code = 200
+
+    def json(self):
+        return {}
+
+
+def test_archiving_without_a_connection_says_to_connect(client, modified):
+    response = client.post("/api/emails/gid-1/archive")
+    assert response.status_code == 503
+    assert "הגדרות" in response.json()["detail"]
+    assert modified == []
+
+
+def test_a_failed_archive_is_a_502(client, connected, monkeypatch):
+    def boom(*a, **k):
+        raise gmail.GmailError("גוגל החזירה 500")
+
+    monkeypatch.setattr(gmail, "_modify", boom)
+    response = client.post("/api/emails/gid-1/archive")
+    assert response.status_code == 502
+    assert "לנסות שוב" in response.json()["detail"]
+
+
+def test_a_revoked_connection_during_an_archive_is_a_503(client, connected, monkeypatch):
+    def boom(*a, **k):
+        raise gauth.GoogleDisconnected("invalid_grant")
+
+    monkeypatch.setattr(gmail, "_modify", boom)
+    assert client.post("/api/emails/gid-1/archive").status_code == 503
+
+
+def test_archiving_requires_a_login(anon, connected, modified):
+    assert anon.post("/api/emails/gid-1/archive").status_code == 401
+    assert anon.post("/api/emails/gid-1/unarchive").status_code == 401
+    assert modified == []
+
+
+def test_an_archived_mail_is_gone_from_the_next_list(client, connected, monkeypatch, modified):
+    """הרשימה נשענת על in:inbox, ולכן מייל שאורכב פשוט אינו חוזר בה.
+
+    זה מה שמייתר מצב מקומי בשרת: אין "רשימת מאורכבים" לתחזק.
+    """
+    listed(monkeypatch, [mail(1), mail(2)])
+    assert len(client.get("/api/emails").json()["items"]) == 2
+    client.post("/api/emails/gid-1/archive")
+    listed(monkeypatch, [mail(2)])
+    assert [item["id"] for item in client.get("/api/emails").json()["items"]] == ["gid-2"]
