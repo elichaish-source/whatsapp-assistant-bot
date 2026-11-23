@@ -7,7 +7,7 @@
 הפריסה: בחירת הפעולה על ידי המודל, ושהסכימה החדשה עוברת את ה-API.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -38,6 +38,12 @@ def connected(db, monkeypatch):
 
 
 def mail(number: int, sender: str = "דני כהן", address: str = "dani@example.com"):
+    """⚠️ מייל של **היום**, ולא תאריך קבוע.
+
+    הרשימה מציגה תאריך למייל שאינו מהיום, ולכן בדיקה עם תאריך קבוע
+    נשברת מעצמה למחרת. זה קרה ב-23.11.2026 על בדיקה שנכתבה ב-19.11.
+    """
+    today = datetime.now(tz=IL).replace(hour=9, minute=number, second=0, microsecond=0)
     return gmail.EmailSummary(
         id=f"gid-{number}",
         thread_id=f"th-{number}",
@@ -45,7 +51,7 @@ def mail(number: int, sender: str = "דני כהן", address: str = "dani@exampl
         sender_email=address,
         subject=f"נושא {number}",
         snippet=f"פתיחה {number}",
-        received_at=datetime(2026, 11, 19, 9, number, tzinfo=IL),
+        received_at=today,
     )
 
 
@@ -144,6 +150,32 @@ def test_the_search_hint_also_points_at_a_number_that_exists(db, connected, monk
     monkeypatch.setattr(gmail, "search", lambda *a, **k: [mail(1)])
     reply = actions.execute(db, Intent(action="search_emails", email_query="דני")).reply
     assert 'תראה לי את 1' in reply
+
+
+def test_a_mail_from_today_shows_only_the_time(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(7)])
+    no_filter(monkeypatch)
+    assert "· 09:07" in actions.execute(db, Intent(action="list_emails")).reply
+
+
+def test_a_mail_from_another_day_shows_the_date(db, connected, monkeypatch):
+    """⚠️ בסיכום שבועי "20:36" ו-"12:29" נראו כאילו מאותו יום.
+
+    נראה בתשובה אמיתית ב-19.11.2026.
+    """
+    earlier = gmail.EmailSummary(
+        id="gid-old",
+        thread_id="th-old",
+        sender_name="דני כהן",
+        sender_email="dani@example.com",
+        subject="נושא",
+        snippet="פתיחה",
+        received_at=datetime.now(tz=IL) - timedelta(days=3),
+    )
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [earlier])
+    no_filter(monkeypatch)
+    reply = actions.execute(db, Intent(action="list_emails", email_scope="week")).reply
+    assert f"· {earlier.received_at:%d/%m %H:%M}" in reply
 
 
 def test_an_empty_inbox_says_so(db, connected, monkeypatch):
@@ -314,6 +346,38 @@ def test_show_all_on_an_empty_inbox_still_says_there_is_nothing(db, connected, m
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [])
     outcome = actions.execute(db, Intent(action="list_emails", email_show_all=True))
     assert "אין מיילים חדשים היום" in outcome.reply
+
+
+# --- פעולה על מייל שטרם נבנתה ---
+
+
+def test_an_email_action_that_is_not_built_says_so_plainly(db, connected):
+    """⚠️ נראה בשימוש אמיתי ב-22.11.2026.
+
+    "זרוק אותו לארכיון" קיבל `unknown`, והתשובה הייתה "לא הבנתי. אפשר
+    לכתוב למשל תזכיר לי מחר ב-10 להתקשר לדני" — הפניה למשימות במקום
+    לומר שהיכולת עוד לא קיימת.
+    """
+    reply = actions.execute(db, Intent(action="email_not_yet")).reply
+    assert "ארכוב" in reply and "עוד לא נבנו" in reply
+    # ואומר מה כן אפשר, כדי שהמשתמש לא ינחש
+    assert "מה נכנס היום" in reply
+    assert "תזכיר לי" not in reply
+
+
+def test_the_not_yet_answer_does_not_promise_a_date(db, connected):
+    """טרם הוכרע אם 4-3 ו-4-4 בבוט או במסך, ואין להבטיח."""
+    reply = actions.execute(db, Intent(action="email_not_yet")).reply
+    for word in ("בקרוב", "בהמשך", "בשלב הבא", "נבנה בימים"):
+        assert word not in reply, word
+
+
+def test_the_not_yet_answer_changes_nothing(db, connected):
+    outcome = actions.execute(db, Intent(action="email_not_yet"))
+    assert outcome.listed_email_ids == []
+    assert outcome.clear_list is False
+    assert outcome.task_id is None
+    assert outcome.pending is None
 
 
 # --- עברית: "מייל אחד" ולא "1 מיילים" ---

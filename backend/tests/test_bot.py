@@ -188,7 +188,7 @@ def test_the_email_fields_are_not_unions():
 
 def test_the_email_actions_reach_their_handlers():
     """שלוש הפעולות החדשות קיימות גם ב-Literal וגם ב-enum של הסכימה."""
-    for name in ("list_emails", "search_emails", "show_email"):
+    for name in ("list_emails", "search_emails", "show_email", "email_not_yet"):
         assert name in INTENT_SCHEMA["properties"]["action"]["enum"], name
         assert name in actions._EMAIL_ACTIONS, name
     # ⚠️ קריאה אינה משנה דבר, ולכן "בטל" צריך לדלג מעליה אחורה
