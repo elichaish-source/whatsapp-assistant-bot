@@ -53,6 +53,8 @@ INBOX_LIMIT = 25
 # האמיתית היו 29 מיילים בדואר הנכנס בשבוע. התשובה מתפצלת להודעות
 SHOW_ALL_LIMIT = 60
 SEARCH_LIMIT = 10
+# המסך בדשבורד מציג יותר מהבוט: אין שם תקרת תווים, ויש גלילה
+SCREEN_LIMIT = 100
 # כמה אחורה מחפשים כשהמשתמש לא אמר. חצי שנה מכסה "מה כתב לי דני"
 # בלי לשלוף את כל ההיסטוריה של התיבה
 SEARCH_MONTHS_BACK = 6
@@ -80,6 +82,11 @@ class EmailSummary:
     subject: str
     snippet: str
     received_at: datetime
+    # מתוך ``labelIds`` שחוזר גם בשליפת כותרות
+    unread: bool = False
+    # ⚠️ אינו מגיע מ-``format=metadata``, שאינו מחזיר את חלקי המייל.
+    # הוא נקבע בשאילתת ``has:attachment`` נפרדת, ב-``list_screen``
+    has_attachments: bool = False
 
     def sender(self) -> str:
         """השם להצגה. כשאין שם, הכתובת עצמה."""
@@ -221,6 +228,7 @@ def fetch_summary(db: Session, message_id: str) -> EmailSummary:
     )
     head = _headers(data.get("payload") or {})
     name, address = parseaddr(head.get("from", ""))
+    labels = {str(item) for item in data.get("labelIds") or []}
     return EmailSummary(
         id=str(data.get("id") or message_id),
         thread_id=str(data.get("threadId") or ""),
@@ -229,6 +237,7 @@ def fetch_summary(db: Session, message_id: str) -> EmailSummary:
         subject=_decode_header(head.get("subject", "")) or "(ללא נושא)",
         snippet=html.unescape(str(data.get("snippet") or "")).strip(),
         received_at=_received(data),
+        unread="UNREAD" in labels,
     )
 
 
@@ -302,6 +311,82 @@ def list_inbox(
     cap = limit or (SHOW_ALL_LIMIT if show_all else INBOX_LIMIT)
     ids = _message_ids(db, inbox_query(scope, show_all), cap)
     found = _summaries(db, ids)
+    found.sort(key=lambda item: item.received_at, reverse=True)
+    return found
+
+
+# כמה זמן תקף סיווג שמור. רענון של המסך לא אמור לשלם שוב על אותם
+# מיילים, ומחצית שעה מכסה עבודה רצופה על התיבה
+TRIAGE_TTL = timedelta(minutes=30)
+# תקרה לגודל המטמון, כדי שתהליך שרץ שבועות לא יתפח
+TRIAGE_CACHE_MAX = 500
+
+# ⚠️⚠️ **המטמון בזיכרון התהליך בלבד, ולא בבסיס הנתונים.** שורת התיאור
+# היא תוכן שנגזר מהמייל, וההבטחה למשתמש היא ש"תוכן המיילים אינו נכתב
+# לבסיס הנתונים" (``frontend/public/privacy.html``). מטמון בזיכרון אינו
+# נוגע בהבטחה הזאת, והוא נמחק בכל הפעלה מחדש של הקונטיינר.
+_triage_cache: dict[str, tuple[datetime, bool, str]] = {}
+
+
+def _cache_get(message_id: str, moment: datetime) -> tuple[bool, str] | None:
+    hit = _triage_cache.get(message_id)
+    if hit is None:
+        return None
+    stored_at, relevant, line = hit
+    if moment - stored_at > TRIAGE_TTL:
+        _triage_cache.pop(message_id, None)
+        return None
+    return relevant, line
+
+
+def _cache_put(message_id: str, relevant: bool, line: str, moment: datetime) -> None:
+    if len(_triage_cache) >= TRIAGE_CACHE_MAX:
+        # הישן ביותר יוצא. מילון שומר על סדר הכנסה, ולכן זה הראשון
+        _triage_cache.pop(next(iter(_triage_cache)), None)
+    _triage_cache[message_id] = (moment, relevant, line)
+
+
+def clear_triage_cache() -> None:
+    """לבדיקות, ולמסך שמבקש סיווג מחדש במפורש."""
+    _triage_cache.clear()
+
+
+def screen_query(scope: str) -> str:
+    """השאילתה למסך המיילים בדשבורד (שלב 4-3).
+
+    ⚠️ **רחבה בכוונה מזו של הסיכום בבוט:** כל הדואר הנכנס בטווח הזמן —
+    **גם מה שנקרא וגם כל הלשוניות**. הוכרע 23.11.2026: המסך הוא מקום
+    העבודה על המיילים, והסיווג לחשוב/לא חשוב הוא מה שמסדר אותו, ולא
+    הסתרה מראש.
+
+    ⚠️ ``in:inbox`` נשאר: 79 מתוך 108 המיילים שהגיעו לחשבון בשבוע לא
+    הגיעו לדואר הנכנס כלל (מסוננים, ספאם, כללים בג'ימייל), והמסך אינו
+    אמור להציג אותם.
+    """
+    days = {"today": 0, "week": 7, "month": 30}.get(scope, 7)
+    return f"in:inbox -in:chats after:{_midnight(days)}"
+
+
+def list_screen(db: Session, scope: str = "week", limit: int = SCREEN_LIMIT) -> list[EmailSummary]:
+    """הרשימה למסך, מהחדש לישן, עם סימון קובץ מצורף.
+
+    ‏⚠️ הקבצים המצורפים נקבעים בשאילתת ``has:attachment`` נפרדת, כי
+    ‏``format=metadata`` אינו מחזיר את חלקי המייל, ושליפת ``full`` לכל
+    מייל ברשימה הייתה גוררת את כל הגופים בלי צורך.
+    """
+    query = screen_query(scope)
+    ids = _message_ids(db, query, limit)
+    found = _summaries(db, ids)
+
+    try:
+        with_files = set(_message_ids(db, f"{query} has:attachment", limit))
+    except GmailError as exc:
+        # סימון קובץ מצורף הוא קוסמטיקה. כשל שלו לא מפיל את הרשימה
+        log.warning("זיהוי קבצים מצורפים נכשל: %s", exc)
+        with_files = set()
+    for item in found:
+        item.has_attachments = item.id in with_files
+
     found.sort(key=lambda item: item.received_at, reverse=True)
     return found
 
@@ -581,72 +666,98 @@ def _triage_block(emails: list[EmailSummary]) -> str:
     return "\n".join(lines)
 
 
-def _fallback(emails: list[EmailSummary], forced: set[str]) -> list[Triaged]:
-    """כשהסינון לא זמין — הכול עובר, עם ה-snippet כשורה.
+def _ask_haiku(emails: list[EmailSummary]) -> dict[int, tuple[bool, str]]:
+    """קריאה אחת ל-Haiku על הרשימה. מחזיר מילון לפי המספר ברשימה.
 
-    ‏⚠️ נכשל לכיוון "להציג" ולא לכיוון "להסתיר": מייל שהוסתר בגלל תקלת
-    רשת הוא מייל שנעלם בשקט, וזה הכשל היחיד שאסור כאן.
+    זורק את החריגות של anthropic כדי שהקורא יחליט מה לעשות בכשל.
     """
-    return [
-        Triaged(
-            email=item,
-            relevant=True,
-            line=item.snippet[:150],
-            forced=item.sender_email.lower() in forced,
-        )
-        for item in emails
-    ]
-
-
-def triage(emails: list[EmailSummary], client_emails: set[str] | None = None) -> list[Triaged]:
-    """מסנן את הרשימה בקריאה **אחת** ל-Haiku, ומחזיר אותה לפי הסדר.
-
-    חלוקת המודלים אינה אופציה אלא תנאי: בלי הסינון כל מייל שנכנס לתיבה
-    היה מגיע למודל הגדול, וזו היכולת היקרה ביותר באפיון.
-    """
-    if not emails:
-        return []
-    forced = {address.lower() for address in (client_emails or set())}
+    import anthropic
 
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        log.warning("סינון מיילים דולג: ANTHROPIC_API_KEY לא מוגדר")
-        return _fallback(emails, forced)
-
-    try:
-        import anthropic
-    except ImportError:  # pragma: no cover - התלות נמצאת ב-requirements
-        return _fallback(emails, forced)
-
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=60.0)
-    try:
-        response = client.messages.create(
-            model=settings.claude_haiku_model,
-            max_tokens=2048,
-            system=[
-                {"type": "text", "text": TRIAGE_PROMPT, "cache_control": {"type": "ephemeral"}}
-            ],
-            messages=[{"role": "user", "content": f"המיילים:\n{_triage_block(emails)}"}],
-            output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
-        )
-        text = next(block.text for block in response.content if block.type == "text")
-        items = json.loads(text).get("items") or []
-    except (anthropic.APIError, StopIteration, json.JSONDecodeError, ValueError) as exc:
-        log.warning("סינון המיילים נכשל: %s", exc)
-        return _fallback(emails, forced)
-
+    response = client.messages.create(
+        model=settings.claude_haiku_model,
+        max_tokens=2048,
+        system=[{"type": "text", "text": TRIAGE_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": f"המיילים:\n{_triage_block(emails)}"}],
+        output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
+    )
+    text = next(block.text for block in response.content if block.type == "text")
     verdicts: dict[int, tuple[bool, str]] = {}
-    for item in items:
+    for item in json.loads(text).get("items") or []:
         try:
             number = int(item["n"])
         except (KeyError, TypeError, ValueError):
             continue
         verdicts[number] = (bool(item.get("relevant")), str(item.get("line") or "").strip())
+    return verdicts
 
+
+def triage(emails: list[EmailSummary], client_emails: set[str] | None = None) -> list[Triaged]:
+    """מסנן את הרשימה ומחזיר אותה לפי הסדר.
+
+    חלוקת המודלים אינה אופציה אלא תנאי: בלי הסינון כל מייל שנכנס לתיבה
+    היה מגיע למודל הגדול, וזו היכולת היקרה ביותר באפיון.
+
+    ⚠️ **רק מיילים שאינם במטמון נשלחים למודל.** בלי זה כל רענון של המסך
+    בדשבורד היה קריאה נוספת בתשלום על אותם מיילים בדיוק.
+    """
+    if not emails:
+        return []
+    forced = {address.lower() for address in (client_emails or set())}
+    moment = datetime.now(tz=local_tz())
+
+    cached: dict[str, tuple[bool, str]] = {}
+    fresh: list[EmailSummary] = []
+    for item in emails:
+        hit = _cache_get(item.id, moment)
+        if hit is None:
+            fresh.append(item)
+        else:
+            cached[item.id] = hit
+
+    verdicts: dict[int, tuple[bool, str]] = {}
+    if fresh:
+        settings = get_settings()
+        if not settings.anthropic_api_key:
+            log.warning("סינון מיילים דולג: ANTHROPIC_API_KEY לא מוגדר")
+            return _merge(emails, cached, {}, forced, store=False)
+        try:
+            verdicts = _ask_haiku(fresh)
+        except Exception as exc:  # noqa: BLE001 - כשל סינון אינו מפיל את הבקשה
+            log.warning("סינון המיילים נכשל: %s", exc)
+            return _merge(emails, cached, {}, forced, store=False)
+
+    # המספרים ש-Haiku החזיר מתייחסים ל-fresh, ולא לרשימה המלאה
+    by_id = {
+        item.id: verdicts[index]
+        for index, item in enumerate(fresh, start=1)
+        if index in verdicts
+    }
+    return _merge(emails, cached, by_id, forced, store=True)
+
+
+def _merge(
+    emails: list[EmailSummary],
+    cached: dict[str, tuple[bool, str]],
+    fresh: dict[str, tuple[bool, str]],
+    forced: set[str],
+    store: bool,
+) -> list[Triaged]:
+    """מחבר מטמון, תשובה חדשה וברירת מחדל לרשימה אחת לפי הסדר."""
+    moment = datetime.now(tz=local_tz())
     result = []
-    for index, item in enumerate(emails, start=1):
-        # מייל שהמודל שכח נחשב רלוונטי: עדיף להציג מיותר מלהחסיר
-        relevant, line = verdicts.get(index, (True, item.snippet[:150]))
+    for item in emails:
+        if item.id in cached:
+            relevant, line = cached[item.id]
+        elif item.id in fresh:
+            relevant, line = fresh[item.id]
+            if store:
+                _cache_put(item.id, relevant, line, moment)
+        else:
+            # מייל שהמודל שכח, או שהסינון לא רץ בכלל: עדיף להציג מיותר
+            # מלהחסיר. ⚠️ לא נשמר במטמון, כדי שהניסיון הבא יסווג אותו
+            relevant, line = True, item.snippet[:150]
         is_client = item.sender_email.lower() in forced
         result.append(
             Triaged(

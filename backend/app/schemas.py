@@ -270,3 +270,51 @@ class GoogleStatusOut(BaseModel):
     last_checked_at: datetime | None = None
     # הרשאות שביקשנו והמשתמש לא אישר. ריק = הכול תקין
     missing_scopes: list[str] = []
+
+
+# --- מסך המיילים (שלב 4-3) ---
+
+
+class EmailItemOut(BaseModel):
+    """מייל אחד בשורת הרשימה. ⚠️ **אינו נשמר בשום מקום** — נקרא מגוגל
+    ברגע הבקשה, מוצג, ונזרק. ``line`` הוא תיאור שנכתב על ידי המודל הזול.
+    """
+
+    id: str
+    thread_id: str = ""
+    sender: str
+    sender_email: str = ""
+    subject: str
+    line: str = ""
+    received_at: datetime
+    important: bool
+    # סומן חשוב בקוד ולא במודל, כי הכתובת רשומה בכרטיס לקוח
+    is_client: bool = False
+    unread: bool = False
+    has_attachments: bool = False
+
+
+class EmailListOut(BaseModel):
+    """הרשימה, ושני המונים שהמסך מציג בלשוניות הסינון."""
+
+    scope: str
+    items: list[EmailItemOut] = []
+    important: int = 0
+    other: int = 0
+    # האם נגענו בתקרת השליפה. המסך אומר את זה למשתמש
+    truncated: bool = False
+
+
+class EmailBodyOut(BaseModel):
+    """המייל המלא לקריאה במסך, בלי ההיסטוריה המצוטטת."""
+
+    id: str
+    thread_id: str = ""
+    sender: str
+    sender_email: str = ""
+    to: str = ""
+    subject: str
+    received_at: datetime
+    body: str
+    attachments: list[str] = []
+    quoted_removed: bool = False

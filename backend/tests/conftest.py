@@ -52,6 +52,20 @@ def clean_db():
         )
 
 
+@pytest.fixture(autouse=True)
+def clear_triage_cache():
+    """⚠️ מטמון הסיווג חי בזיכרון המודול ועובר בין בדיקות אם לא מאפסים.
+
+    בלי זה בדיקה שמחזירה "סונן" על מזהה מסוים הייתה מזהמת כל בדיקה
+    אחרת שמשתמשת באותו מזהה.
+    """
+    from app import gmail
+
+    gmail.clear_triage_cache()
+    yield
+    gmail.clear_triage_cache()
+
+
 @pytest.fixture
 def sent(monkeypatch):
     messages = []
