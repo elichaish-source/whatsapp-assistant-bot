@@ -175,7 +175,7 @@ def test_a_mail_from_another_day_shows_the_date(db, connected, monkeypatch):
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [earlier])
     no_filter(monkeypatch)
     reply = actions.execute(db, Intent(action="list_emails", email_scope="week")).reply
-    assert f"· {earlier:%d/%m %H:%M}" in reply
+    assert f"· {earlier.received_at:%d/%m %H:%M}" in reply
 
 
 def test_an_empty_inbox_says_so(db, connected, monkeypatch):
