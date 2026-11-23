@@ -678,3 +678,56 @@ pre {
   font-size: 0.9rem;
   line-height: 1.5;
 }
+
+/* --- מיילים (שלב 4-3) --- */
+
+.mail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* השולח בהתחלה והשעה בקצה השני, כדי שהעין תסרוק עמודת שולחים אחת */
+.mail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mail-sender {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.mail-when {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* נקודה ולא הדגשה בלבד: ברשימה שבה רוב המיילים נקראו, הבדל בעובי הגופן
+   לא נתפס במבט, ובמיוחד לא בעברית */
+.mail-dot {
+  color: var(--primary);
+  font-size: 0.7rem;
+}
+
+.mail.unread .mail-subject {
+  font-weight: 600;
+}
+
+.mail-subject {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* לשוניות הסינון נושאות מונה, ולכן צריכות מרווח בין הטקסט למונה */
+.when-tabs button .badge {
+  margin-inline-start: 6px;
+}

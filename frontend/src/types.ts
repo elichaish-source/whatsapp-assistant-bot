@@ -147,3 +147,56 @@ export const GOOGLE_RESULTS: Record<string, string> = {
   auth: "פג תוקף הכניסה לדשבורד באמצע החיבור. התחבר ונסה שוב.",
   config: "חיבור גוגל לא מוגדר בשרת.",
 };
+
+/** חלון הזמן במסך המיילים. השרת מקבל בדיוק את שלושת הערכים האלה */
+export type MailScope = "today" | "week" | "month";
+
+export const MAIL_SCOPE_LABELS: Record<MailScope, string> = {
+  today: "היום",
+  week: "השבוע",
+  month: "החודש",
+};
+
+/**
+ * מייל אחד בשורת הרשימה.
+ * ⚠️ אינו נשמר בשום מקום: נקרא מגוגל ברגע הבקשה, מוצג, ונזרק.
+ * ‏`line` הוא תיאור של משפט שהמודל הזול כתב, ולא טקסט מהמייל.
+ */
+export interface MailItem {
+  id: string;
+  thread_id: string;
+  sender: string;
+  sender_email: string;
+  subject: string;
+  line: string;
+  received_at: string;
+  important: boolean;
+  // סומן חשוב בקוד ולא במודל, כי הכתובת רשומה בכרטיס לקוח
+  is_client: boolean;
+  unread: boolean;
+  has_attachments: boolean;
+}
+
+export interface MailList {
+  scope: MailScope;
+  items: MailItem[];
+  important: number;
+  other: number;
+  // נגענו בתקרת השליפה, וייתכן שיש עוד מיילים בטווח
+  truncated: boolean;
+}
+
+/** המייל המלא לקריאה. ⚠️ `body` הוא טקסט ולא HTML, ומוצג כטקסט */
+export interface MailBody {
+  id: string;
+  thread_id: string;
+  sender: string;
+  sender_email: string;
+  to: string;
+  subject: string;
+  received_at: string;
+  body: string;
+  attachments: string[];
+  // האם נחתכה היסטוריה מצוטטת. נאמר למשתמש, כדי שידע שיש עוד
+  quoted_removed: boolean;
+}
