@@ -272,6 +272,172 @@ def test_show_all_has_a_higher_cap_than_the_summary():
     assert gmail.SHOW_ALL_LIMIT > gmail.INBOX_LIMIT
 
 
+# --- השאילתה למסך בדשבורד (תשתית ל-4-3) ---
+
+
+def test_the_screen_query_is_wider_than_the_bot_summary():
+    """⚠️ הוכרע 23.11.2026: המסך מציג **כל** הדואר הנכנס.
+
+    גם מה שנקרא וגם כל הלשוניות. הסיווג לחשוב/לא חשוב הוא מה שמסדר את
+    המסך, ולא הסתרה מראש כמו בסיכום בבוט.
+    """
+    query = gmail.screen_query("week")
+    assert "is:unread" not in query
+    assert "-category:" not in query
+    assert "-in:chats" in query
+
+
+def test_the_screen_query_stays_in_the_inbox():
+    """⚠️ 79 מתוך 108 שהגיעו לחשבון בשבוע לא הגיעו לדואר הנכנס."""
+    assert "in:inbox" in gmail.screen_query("week")
+
+
+def test_the_screen_query_supports_three_windows():
+    stamps = {
+        scope: int(gmail.screen_query(scope).split("after:")[1])
+        for scope in ("today", "week", "month")
+    }
+    assert stamps["month"] < stamps["week"] < stamps["today"]
+
+
+def test_an_unknown_screen_window_falls_back_to_a_week():
+    assert gmail.screen_query("לא קיים") == gmail.screen_query("week")
+
+
+# --- מטמון הסיווג ---
+
+
+def test_the_second_triage_of_the_same_mail_does_not_call_the_model(monkeypatch):
+    """⚠️ בלי זה כל רענון של המסך היה קריאה נוספת בתשלום.
+
+    העלות היא הסיבה שהסינון קיים בכלל, ולכן מטמון אינו קוסמטיקה.
+    """
+    calls: list[int] = []
+
+    def counted(emails):
+        calls.append(len(emails))
+        return {index: (True, "שורה") for index, _ in enumerate(emails, start=1)}
+
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", counted)
+
+    first = gmail.triage([summary(1), summary(2)])
+    second = gmail.triage([summary(1), summary(2)])
+    assert [item.line for item in first] == ["שורה", "שורה"]
+    assert [item.line for item in second] == ["שורה", "שורה"]
+    # קריאה אחת בלבד, ועל שני המיילים
+    assert calls == [2]
+
+
+def test_only_the_uncached_mails_are_sent_to_the_model(monkeypatch):
+    sent: list[list[str]] = []
+
+    def counted(emails):
+        sent.append([item.id for item in emails])
+        return {index: (True, f"שורה {item.id}") for index, item in enumerate(emails, start=1)}
+
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", counted)
+
+    gmail.triage([summary(1)])
+    gmail.triage([summary(1), summary(2)])
+    assert sent == [["id-1"], ["id-2"]]
+
+
+def test_the_cached_verdict_is_the_one_the_model_gave(monkeypatch):
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    assert gmail.triage([summary(1)])[0].relevant is False
+    # ובפעם השנייה, מהמטמון, אותה הכרעה
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: pytest.fail("אין לקרוא שוב"))
+    assert gmail.triage([summary(1)])[0].relevant is False
+
+
+def test_an_expired_entry_is_asked_again(monkeypatch):
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    gmail.triage([summary(1)])
+    monkeypatch.setattr(gmail, "TRIAGE_TTL", -gmail.TRIAGE_TTL)
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "עבר עכשיו")})
+    assert gmail.triage([summary(1)])[0].line == "עבר עכשיו"
+
+
+def test_a_failed_triage_is_not_cached(monkeypatch):
+    """⚠️ אחרת תקלת רשת אחת הייתה מקפיאה "הכול עובר" לחצי שעה."""
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+
+    def boom(emails):
+        raise RuntimeError("רשת")
+
+    monkeypatch.setattr(gmail, "_ask_haiku", boom)
+    assert gmail.triage([summary(1)])[0].relevant is True
+
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    assert gmail.triage([summary(1)])[0].relevant is False
+
+
+def test_a_mail_the_model_forgot_is_not_cached(monkeypatch):
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {})
+    assert gmail.triage([summary(1)])[0].relevant is True
+
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    assert gmail.triage([summary(1)])[0].relevant is False
+
+
+def test_the_cache_is_bounded(monkeypatch):
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(
+        gmail,
+        "_ask_haiku",
+        lambda emails: {index: (True, "שורה") for index, _ in enumerate(emails, start=1)},
+    )
+    monkeypatch.setattr(gmail, "TRIAGE_CACHE_MAX", 5)
+    for number in range(1, 20):
+        gmail.triage([summary(number)])
+    assert len(gmail._triage_cache) <= 5
+
+
+def test_clearing_the_cache_makes_the_model_run_again(monkeypatch):
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "ראשונה")})
+    gmail.triage([summary(1)])
+    gmail.clear_triage_cache()
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "שנייה")})
+    assert gmail.triage([summary(1)])[0].line == "שנייה"
+
+
+# --- לא נקרא, וקבצים מצורפים ---
+
+
+def test_unread_comes_from_the_label(db, monkeypatch):
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda db_, path, params=None: {
+            "id": "gid-1",
+            "internalDate": "1795057000000",
+            "labelIds": ["INBOX", "UNREAD"],
+            "payload": {"headers": [{"name": "Subject", "value": "נושא"}]},
+        },
+    )
+    assert gmail.fetch_summary(db, "gid-1").unread is True
+
+
+def test_a_read_mail_is_not_marked_unread(db, monkeypatch):
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda db_, path, params=None: {
+            "id": "gid-1",
+            "internalDate": "1795057000000",
+            "labelIds": ["INBOX"],
+            "payload": {"headers": []},
+        },
+    )
+    assert gmail.fetch_summary(db, "gid-1").unread is False
+
+
 def test_the_inbox_query_never_uses_category_primary():
     """⚠️ רגרסיה על באג אמיתי שנתפס רק מול התיבה (19.11.2026).
 
@@ -492,7 +658,7 @@ def test_triage_of_an_empty_list_does_not_call_anything():
     assert gmail.triage([]) == []
 
 
-def test_the_fallback_marks_a_client_address_as_forced(monkeypatch):
+def test_without_a_key_a_client_address_is_still_marked_as_forced(monkeypatch):
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "")
     result = gmail.triage([summary(1)], {"dani@example.com"})
     assert result[0].forced is True
