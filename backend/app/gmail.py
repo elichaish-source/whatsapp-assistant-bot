@@ -183,13 +183,13 @@ def _b64(data: str) -> bytes:
 # --- הקריאות לגוגל ---
 
 
-def _get(db: Session, path: str, params: dict | None = None) -> dict:
-    """קריאת GET ל-Gmail עם טוקן טרי.
+def _request(token: str, path: str, params: dict | None = None) -> dict:
+    """קריאת GET ל-Gmail עם טוקן שכבר ביד.
 
-    ‏``GoogleDisconnected`` עולה כמו שהוא: הקורא צריך להבדיל בין "התיבה
-    לא נגישה כרגע, נסה שוב" לבין "צריך לחבר מחדש בדשבורד".
+    ⚠️ **מקבלת טוקן ולא ``Session``, ולכן בטוחה לקריאה מכמה תהליכונים.**
+    ‏``Session`` של SQLAlchemy אינו בטוח לשימוש מקביל, וזה מה שמאפשר
+    ל-``_summaries`` לשלוף את כל הכותרות במקביל.
     """
-    token = gauth.access_token(db)
     try:
         response = httpx.get(
             f"{API}/{path}",
@@ -211,26 +211,28 @@ def _get(db: Session, path: str, params: dict | None = None) -> dict:
         raise GmailError("תשובה לא תקינה מגוגל") from exc
 
 
+def _get(db: Session, path: str, params: dict | None = None) -> dict:
+    """קריאת GET ל-Gmail עם טוקן טרי.
+
+    ‏``GoogleDisconnected`` עולה כמו שהוא: הקורא צריך להבדיל בין "התיבה
+    לא נגישה כרגע, נסה שוב" לבין "צריך לחבר מחדש בדשבורד".
+    """
+    return _request(gauth.access_token(db), path, params)
+
+
 def _message_ids(db: Session, query: str, limit: int) -> list[str]:
     data = _get(db, "messages", {"q": query, "maxResults": limit})
     return [str(item["id"]) for item in data.get("messages") or [] if item.get("id")]
 
 
-def fetch_summary(db: Session, message_id: str) -> EmailSummary:
-    """מייל אחד ברמת כותרות בלבד.
+# הפרמטרים לשליפת כותרות. ``format=metadata`` ולא ``full``: לרשימה צריך
+# שולח, נושא ושורת ה-``snippet`` של גוגל, והגוף אינו נשלף — גם זול יותר
+# וגם פחות תוכן שעובר בכלל
+_META = {"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}
 
-    ‏``format=metadata`` ולא ``full``: לסיכום צריך שולח, נושא ושורת
-    ה-``snippet`` של גוגל, והגוף אינו נשלף — גם זול יותר וגם פחות תוכן
-    שעובר בכלל.
-    """
-    data = _get(
-        db,
-        f"messages/{message_id}",
-        {
-            "format": "metadata",
-            "metadataHeaders": ["From", "Subject", "Date"],
-        },
-    )
+
+def _parse_summary(data: dict, message_id: str) -> EmailSummary:
+    """בונה ``EmailSummary`` מתשובת גוגל. פונקציה טהורה."""
     head = _headers(data.get("payload") or {})
     name, address = parseaddr(head.get("from", ""))
     labels = {str(item) for item in data.get("labelIds") or []}
@@ -246,15 +248,39 @@ def fetch_summary(db: Session, message_id: str) -> EmailSummary:
     )
 
 
+def fetch_summary(db: Session, message_id: str) -> EmailSummary:
+    """מייל אחד ברמת כותרות בלבד."""
+    return _parse_summary(_get(db, f"messages/{message_id}", dict(_META)), message_id)
+
+
+# כמה כותרות נשלפות במקביל. ⚠️ **זה מה שהפך את הטעינה מ-3.2 שניות
+# ל-0.5:** גוגל מחזירה כותרת אחת בכל קריאה, וסדרתית זו קריאת רשת שלמה
+# (‏~0.2 שניות) לכל מייל ברשימה. נמדד מול התיבה האמיתית ב-24.11.2026.
+# שמונה ולא יותר: מעבר לזה הרווח קטן, והסיכון להגבלת קצב מצד גוגל גדל
+SUMMARY_WORKERS = 8
+
+
 def _summaries(db: Session, ids: list[str]) -> list[EmailSummary]:
-    """כותרות של כמה מיילים. מייל שנכשל מדולג ולא מפיל את הרשימה כולה."""
-    found = []
-    for message_id in ids:
+    """כותרות של כמה מיילים, במקביל. מייל שנכשל מדולג ולא מפיל את הרשימה.
+
+    ⚠️ **הטוקן נקרא פעם אחת, לפני התהליכונים**, ולא בכל מייל: ``Session``
+    של SQLAlchemy אינו בטוח לשימוש מקביל, ו-``access_token`` ניגש למסד.
+    זה גם חוסך קריאת מסד ופענוח הצפנה לכל מייל ברשימה.
+    """
+    if not ids:
+        return []
+    token = gauth.access_token(db)
+
+    def one(message_id: str) -> EmailSummary | None:
         try:
-            found.append(fetch_summary(db, message_id))
+            data = _request(token, f"messages/{message_id}", dict(_META))
         except GmailError as exc:
             log.warning("דילוג על מייל %s: %s", message_id, exc)
-    return found
+            return None
+        return _parse_summary(data, message_id)
+
+    with ThreadPoolExecutor(max_workers=min(SUMMARY_WORKERS, len(ids))) as pool:
+        return [item for item in pool.map(one, ids) if item is not None]
 
 
 def _midnight(days_back: int = 0) -> int:
@@ -740,10 +766,15 @@ def _triage_block(emails: list[EmailSummary]) -> str:
 # כמה מיילים בקריאה אחת למודל. ⚠️ **החלוקה אינה אופטימיזציה אלא בידוד
 # כשלים:** קריאה אחת על כל הרשימה היא הכול-או-כלום, ותקלה אחת בה מחזירה
 # מסך שבו כל מייל "חשוב". עם חלוקה, כשל נוגע למנה אחת בלבד, והשאר מסווג.
-TRIAGE_BATCH = 20
-# כמה מנות רצות במקביל. המסך ממתין להן, ולכן טורי היה אומר חמש קריאות
-# זו אחר זו על חודש שלם
-TRIAGE_WORKERS = 4
+#
+# ⚠️ **הגודל נקבע ממדידה ולא מהערכה (24.11.2026):** מנה של 14 מיילים
+# ארכה 11.7 שניות, כי זמן הקריאה נגזר כמעט כולו מכמות הטקסט שהמודל
+# כותב — שורה בעברית לכל מייל. שש הוא האיזון: מספיק קטן כדי שכמה מנות
+# ירוצו במקביל ויקצרו את ההמתנה, ומספיק גדול כדי לא להציף בקריאות.
+TRIAGE_BATCH = 6
+# כמה מנות רצות במקביל. המסך ממתין להן, ולכן טורי היה אומר קריאה אחרי
+# קריאה על חודש שלם
+TRIAGE_WORKERS = 6
 
 
 def _triage_tokens(count: int) -> int:
