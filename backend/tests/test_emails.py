@@ -327,3 +327,23 @@ def test_both_routes_require_a_login(anon, connected, monkeypatch):
     monkeypatch.setattr(gmail, "fetch_full", lambda db, mid: full(1))
     assert anon.get("/api/emails").status_code == 401
     assert anon.get("/api/emails/gid-1").status_code == 401
+
+
+# --- שרשורים במסך ---
+
+
+def test_the_thread_count_reaches_the_screen(client, connected, monkeypatch):
+    listed(monkeypatch, [mail(1, thread_count=3), mail(2)])
+    items = client.get("/api/emails").json()["items"]
+    assert items[0]["thread_count"] == 3
+    assert items[1]["thread_count"] == 1
+
+
+def test_truncation_counts_messages_and_not_rows(client, connected, monkeypatch):
+    """⚠️ הרשימה מכווצת לשרשורים: 100 הודעות עשויות לחזור כ-50 שורות,
+    ולכן ספירת שורות הייתה אומרת "לא נגענו בתקרה" בדיוק כשנגענו בה."""
+    rows = gmail.SCREEN_LIMIT // 2
+    listed(monkeypatch, [mail(number, thread_count=2) for number in range(rows)])
+    body = client.get("/api/emails").json()
+    assert len(body["items"]) == rows
+    assert body["truncated"] is True

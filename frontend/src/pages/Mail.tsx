@@ -72,9 +72,9 @@ export default function Mail() {
     <div>
       <h1>מיילים</h1>
       <p className="muted">
-        כל הדואר הנכנס בטווח הזמן — גם מה שנקרא וגם כל הלשוניות — מסודר לפי חשוב ולא חשוב. הסיווג
-        נעשה על הכותרות בלבד, ואפשר לפתוח כל מייל לקריאה. ⚠️ שום תוכן מייל אינו נשמר: הוא נקרא
-        מגוגל ברגע שאתה מבקש אותו.
+        כל הדואר הנכנס בטווח הזמן — גם מה שנקרא וגם כל הלשוניות — מסודר לפי חשוב ולא חשוב, שורה
+        לכל שרשור. הסיווג נעשה על הכותרות בלבד, ואפשר לפתוח כל מייל לקריאה. ⚠️ שום תוכן מייל אינו
+        נשמר: הוא נקרא מגוגל ברגע שאתה מבקש אותו.
       </p>
 
       {/* חלון הזמן. נפרד מלשוניות הסינון, כי הוא מה שנשלף מגוגל ולא מה שמסונן */}
@@ -155,6 +155,12 @@ export default function Mail() {
                       </>
                     )}
                     {item.sender}
+                    {/* שורה אחת לכל שרשור. המונה מראה שלא נעלמה הודעה */}
+                    {item.thread_count > 1 && (
+                      <span className="pill" title={`${item.thread_count} הודעות בשרשור הזה`}>
+                        {item.thread_count}
+                      </span>
+                    )}
                     {item.is_client && (
                       <span className="pill" title="כתובת רשומה בכרטיס לקוח">
                         לקוח
@@ -187,6 +193,11 @@ export default function Mail() {
             <span>{opening.sender}</span>
             {opening.sender_email && <span>{opening.sender_email}</span>}
             <span>{formatWhen(opening.received_at)}</span>
+            {/* נפתחת ההודעה האחרונה בשרשור. בלי זה אפשר לקרוא אחת ולהחמיץ
+                את הקודמות, בלי לדעת בכלל שהן קיימות */}
+            {opening.thread_count > 1 && (
+              <span>ההודעה האחרונה מתוך {opening.thread_count} בשרשור</span>
+            )}
           </div>
           {openError ? (
             <p className="error">{openError}</p>

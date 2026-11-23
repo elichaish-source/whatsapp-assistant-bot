@@ -292,6 +292,9 @@ class EmailItemOut(BaseModel):
     is_client: bool = False
     unread: bool = False
     has_attachments: bool = False
+    # כמה הודעות יש בשרשור שהשורה מייצגת. ⚠️ מוצג למשתמש, כדי ששורה
+    # שמאחוריה שתי הודעות לא תיראה כאילו אחת מהן נעלמה
+    thread_count: int = 1
 
 
 class EmailListOut(BaseModel):

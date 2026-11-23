@@ -88,6 +88,7 @@ def list_emails(
             is_client=item.forced,
             unread=item.email.unread,
             has_attachments=item.email.has_attachments,
+            thread_count=item.email.thread_count,
         )
         for item in triaged
     ]
@@ -97,8 +98,11 @@ def list_emails(
         items=items,
         important=important,
         other=len(items) - important,
-        # נגענו בתקרה, ולכן ייתכן שיש עוד מיילים בטווח שלא נשלפו
-        truncated=len(found) >= gmail.SCREEN_LIMIT,
+        # נגענו בתקרה, ולכן ייתכן שיש עוד מיילים בטווח שלא נשלפו.
+        # ⚠️ נספרות **הודעות ולא שורות**: הרשימה מכווצת לשרשורים, ולכן
+        # ‏100 הודעות עשויות לחזור כ-80 שורות, ו-``len(found)`` היה
+        # אומר "לא נגענו בתקרה" בדיוק כשנגענו בה
+        truncated=sum(item.thread_count for item in found) >= gmail.SCREEN_LIMIT,
     )
 
 

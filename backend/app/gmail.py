@@ -88,6 +88,10 @@ class EmailSummary:
     # ⚠️ אינו מגיע מ-``format=metadata``, שאינו מחזיר את חלקי המייל.
     # הוא נקבע בשאילתת ``has:attachment`` נפרדת, ב-``list_screen``
     has_attachments: bool = False
+    # כמה הודעות יש בשרשור שהשורה הזאת מייצגת. ‏1 פירושו מייל בודד.
+    # ⚠️ נקבע ב-``collapse_threads``, ומוצג למשתמש כדי ששורה שמאחוריה
+    # שתי הודעות לא תיראה כאילו אחת מהן נעלמה
+    thread_count: int = 1
 
     def sender(self) -> str:
         """השם להצגה. כשאין שם, הכתובת עצמה."""
@@ -368,12 +372,53 @@ def screen_query(scope: str) -> str:
     return f"in:inbox -in:chats after:{_midnight(days)}"
 
 
+def collapse_threads(found: list[EmailSummary]) -> list[EmailSummary]:
+    """שורה אחת לכל שרשור, עם ההודעה האחרונה שבו.
+
+    ‏**הוכרע 23.11.2026, אחרי שהמסך הציג 19 מיילים ב-17 שרשורים:** אותה
+    רשימת תפוצה שלחה פעמיים בהפרש של ארבע שניות, והמשתמש ראה את אותו
+    מייל פעמיים זה מתחת לזה. זו גם ההתנהגות של ג'ימייל עצמה, וגם מה
+    שמכווץ שיחה אמיתית עם כמה תשובות לשורה אחת.
+
+    ⚠️ **שום הודעה אינה נעלמת בשקט:** ``thread_count`` אומר כמה יש
+    מאחורי השורה, והמסך מציג את זה. ‏``unread`` ו-``has_attachments``
+    מאוחדים על פני השרשור — מייל שלא נקרא בתוך שרשור אינו מפסיק להיות
+    כזה רק מפני שהודעה חדשה יותר כבר נקראה.
+    """
+    newest: dict[str, EmailSummary] = {}
+    for item in found:
+        # שרשור ריק לא אמור לקרות, אבל מזהה ריק היה מאחד מיילים זרים
+        key = item.thread_id or f"id:{item.id}"
+        kept = newest.get(key)
+        if kept is None:
+            newest[key] = item
+            continue
+        if item.received_at > kept.received_at:
+            item.thread_count = kept.thread_count
+            item.unread = item.unread or kept.unread
+            item.has_attachments = item.has_attachments or kept.has_attachments
+            newest[key] = item
+            kept = item
+        else:
+            kept.unread = kept.unread or item.unread
+            kept.has_attachments = kept.has_attachments or item.has_attachments
+        kept.thread_count += 1
+
+    collapsed = list(newest.values())
+    collapsed.sort(key=lambda item: item.received_at, reverse=True)
+    return collapsed
+
+
 def list_screen(db: Session, scope: str = "week", limit: int = SCREEN_LIMIT) -> list[EmailSummary]:
-    """הרשימה למסך, מהחדש לישן, עם סימון קובץ מצורף.
+    """הרשימה למסך, שורה לכל שרשור, מהחדש לישן, עם סימון קובץ מצורף.
 
     ‏⚠️ הקבצים המצורפים נקבעים בשאילתת ``has:attachment`` נפרדת, כי
     ‏``format=metadata`` אינו מחזיר את חלקי המייל, ושליפת ``full`` לכל
     מייל ברשימה הייתה גוררת את כל הגופים בלי צורך.
+
+    ⚠️ **הכיווץ קורה לפני הסיווג**, ולכן המודל מקבל שורה לכל שרשור ולא
+    לכל הודעה. זה גם זול יותר וגם נכון: שתי הודעות באותו שרשור אינן שתי
+    החלטות שונות.
     """
     query = screen_query(scope)
     ids = _message_ids(db, query, limit)
@@ -388,8 +433,7 @@ def list_screen(db: Session, scope: str = "week", limit: int = SCREEN_LIMIT) -> 
     for item in found:
         item.has_attachments = item.id in with_files
 
-    found.sort(key=lambda item: item.received_at, reverse=True)
-    return found
+    return collapse_threads(found)
 
 
 def search_query(text: str) -> str:
@@ -467,7 +511,10 @@ def fetch_full(db: Session, message_id: str) -> EmailFull:
         rich = next((value for mime, value in texts if mime == "text/html"), "")
         plain = _html_to_text(rich)
 
+    # ⚠️ ``strip_cid`` אחרי ``strip_quoted`` ולא לפניו: חיתוך ההיסטוריה
+    # מסתמך על מיקומים בטקסט, והסרה קודמת הייתה מזיזה אותם
     body, removed = strip_quoted(normalize(plain))
+    body = strip_cid(body).strip()
     name, address = parseaddr(head.get("from", ""))
     return EmailFull(
         id=str(data.get("id") or message_id),
@@ -492,6 +539,24 @@ def fetch_full(db: Session, message_id: str) -> EmailFull:
 # בסוף הגוף שהוצג למשתמש. התווים האלה הם רמזי תצוגה בלבד, ווואטסאפ
 # מסתדרת בלעדיהם, ולכן הם יורדים לפני ההתאמה.
 _BIDI = re.compile(r"[‎‏‪-‮⁦-⁩]")
+
+
+# הפניה לתמונה מוטבעת, שנשארת בחלק ה-``text/plain`` של המייל:
+# ‏``[cid:02092409475476_10_axgg18ij_e2c66f3a-....png]``. ⚠️ זה לעולם
+# אינו טקסט שהשולח כתב, אלא מזהה פנימי של הקובץ המצורף — ולכן הוא יורד.
+# נראה בתיבה האמיתית ב-23.11.2026, באמצע מייל שנפתח לקריאה.
+# הגבול של 300 תווים ובלי שורה חדשה: סוגריים מרובעים מופיעים גם בטקסט
+# רגיל, וביטוי חופשי היה בולע פסקה שלמה
+_CID = re.compile(r"\[cid:[^\]\n]{0,300}\]", re.IGNORECASE)
+
+
+def strip_cid(text: str) -> str:
+    """מסיר הפניות לתמונות מוטבעות, ומנקה את השורות הריקות שנשארו."""
+    cleaned = _CID.sub("", text)
+    # שורה שכל תוכנה היה הפניה אחת נשארת ריקה, ושלוש ריקות ברצף נראות
+    # כמו קפיצה בלתי מוסברת באמצע המייל
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
 
 
 def normalize(text: str) -> str:
@@ -638,9 +703,14 @@ TRIAGE_PROMPT = """אתה מסנן מיילים בשביל אדם שמנהל ע�
 פנייה מלקוח, הצעת מחיר, חוזה, חשבונית או דרישת תשלום, מועד שנקבע או
 השתנה, מסמך מרשות או מרואה חשבון, תקלה, או שאלה שמחכה לתשובה.
 
+⚠️ **דוח קבוע או הודעה אוטומטית הם relevant כשהמספרים שבהם אומרים
+שמשהו לא בסדר:** יתרה שלילית, חריגה ממסגרת, תשלום שלא עבר או שמועדו
+חלף, בקשה שנדחתה, או שגיאה. מה שקובע הוא מה שכתוב בפועל, ולא מי שלח:
+אותו דוח יומי הוא false ביום רגיל, ו-true ביום שבו היתרה שלילית.
+
 ‏relevant הוא false כשאין בו דבר שדורש ממנו כלום: פרסומת, ניוזלטר, הצעה
-שיווקית, התראת מערכת אוטומטית, אישור הרשמה, עדכון תנאי שימוש, או מייל
-שנשלח לרשימת תפוצה.
+שיווקית, הודעת מערכת שהכול תקין בה, אישור הרשמה, עדכון תנאי שימוש, או
+מייל שנשלח לרשימת תפוצה.
 
 ב-line כתוב משפט אחד קצר בעברית שאומר מה יש במייל ומה מבקשים ממנו —
 "מבקש חתימה על החוזה עד חמישי", "חשבונית לתשלום 847 ש\"ח". בלי לחזור על
