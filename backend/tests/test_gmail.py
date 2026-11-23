@@ -868,3 +868,146 @@ def test_the_mails_of_a_failed_batch_are_not_cached(monkeypatch):
 
     monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
     assert gmail.triage([summary(1)])[0].relevant is False
+
+
+# --- שרשורים: שורה אחת לכל שרשור ---
+#
+# הוכרע 23.11.2026, אחרי שהמסך הציג 19 מיילים ב-17 שרשורים: אותה רשימת
+# תפוצה שלחה פעמיים בהפרש של ארבע שניות, והמשתמש ראה את אותו מייל
+# פעמיים זה מתחת לזה.
+
+
+def threaded(number: int, thread: str, minute: int, **extra):
+    item = summary(number)
+    item.thread_id = thread
+    item.received_at = item.received_at.replace(minute=minute)
+    for key, value in extra.items():
+        setattr(item, key, value)
+    return item
+
+
+def test_two_mails_in_one_thread_become_one_row():
+    found = gmail.collapse_threads([threaded(1, "th-a", 10), threaded(2, "th-a", 20)])
+    assert len(found) == 1
+    assert found[0].thread_count == 2
+
+
+def test_the_row_carries_the_newest_message_of_the_thread():
+    found = gmail.collapse_threads([threaded(1, "th-a", 10), threaded(2, "th-a", 20)])
+    assert found[0].id == "id-2"
+    assert found[0].received_at.minute == 20
+
+
+def test_the_newest_wins_whatever_the_order_it_arrived_in():
+    """הסדר שגוגל מחזירה אינו מובטח, ולכן אסור להסתמך עליו."""
+    found = gmail.collapse_threads([threaded(2, "th-a", 20), threaded(1, "th-a", 10)])
+    assert found[0].id == "id-2"
+    assert found[0].thread_count == 2
+
+
+def test_separate_threads_stay_separate():
+    found = gmail.collapse_threads([threaded(1, "th-a", 10), threaded(2, "th-b", 20)])
+    assert len(found) == 2
+    assert all(item.thread_count == 1 for item in found)
+
+
+def test_an_unread_message_keeps_the_thread_unread():
+    """⚠️ מייל שלא נקרא בתוך שרשור אינו מפסיק להיות כזה רק מפני
+    שהודעה חדשה יותר באותו שרשור כבר נקראה."""
+    found = gmail.collapse_threads(
+        [threaded(1, "th-a", 10, unread=True), threaded(2, "th-a", 20, unread=False)]
+    )
+    assert found[0].unread is True
+
+
+def test_an_attachment_anywhere_in_the_thread_is_marked():
+    found = gmail.collapse_threads(
+        [
+            threaded(1, "th-a", 10, has_attachments=True),
+            threaded(2, "th-a", 20, has_attachments=False),
+        ]
+    )
+    assert found[0].has_attachments is True
+
+
+def test_the_rows_stay_newest_first():
+    found = gmail.collapse_threads(
+        [threaded(1, "th-a", 10), threaded(2, "th-b", 30), threaded(3, "th-c", 20)]
+    )
+    assert [item.id for item in found] == ["id-2", "id-3", "id-1"]
+
+
+def test_mails_without_a_thread_id_are_not_merged():
+    """⚠️ מזהה ריק היה מאחד מיילים זרים לשורה אחת, והשאר היו נעלמים."""
+    first, second = threaded(1, "", 10), threaded(2, "", 20)
+    found = gmail.collapse_threads([first, second])
+    assert len(found) == 2
+
+
+def test_no_message_is_lost_in_the_count():
+    """סכום thread_count חייב להחזיר את מספר ההודעות שנכנסו."""
+    items = [threaded(number, f"th-{number % 3}", number) for number in range(1, 10)]
+    found = gmail.collapse_threads(items)
+    assert sum(item.thread_count for item in found) == len(items)
+
+
+# --- הפניות לתמונות מוטבעות ---
+
+
+def test_a_cid_reference_is_removed():
+    """נראה בתיבה האמיתית ב-23.11.2026, באמצע מייל שנפתח לקריאה."""
+    text = "בברכה,\n\n[cid:02092409475476_10_axgg18ij_e2c66f3a-71ef-4e93.png]\n\nאברהם"
+    cleaned = gmail.strip_cid(text)
+    assert "cid:" not in cleaned
+    assert "בברכה," in cleaned
+    assert "אברהם" in cleaned
+
+
+def test_several_cid_references_go_together():
+    cleaned = gmail.strip_cid("[cid:a.png] טקסט [cid:b.png] עוד")
+    assert "cid:" not in cleaned
+    assert "טקסט" in cleaned and "עוד" in cleaned
+
+
+def test_removing_a_cid_does_not_leave_a_hole():
+    """שלוש שורות ריקות ברצף נראות כקפיצה בלתי מוסברת באמצע המייל."""
+    cleaned = gmail.strip_cid("שורה\n\n[cid:a.png]\n\nשורה אחרת")
+    assert "\n\n\n" not in cleaned
+
+
+def test_square_brackets_in_ordinary_text_are_kept():
+    """⚠️ סוגריים מרובעים מופיעים גם בטקסט רגיל, ולא כל אחד הוא cid."""
+    text = "ראה [נספח א'] בעמוד 3"
+    assert gmail.strip_cid(text) == text
+
+
+def test_a_cid_is_removed_from_a_full_mail(db, monkeypatch):
+    """הבדיקה שמוודאת שהניקוי באמת מחובר ל-fetch_full."""
+    body = base64.urlsafe_b64encode("שלום\n[cid:x.png]\nבברכה".encode()).decode()
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda db_, path, params=None: {
+            "id": "gid-1",
+            "threadId": "th-1",
+            "internalDate": "1763500000000",
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [{"name": "From", "value": "דני <dani@example.com>"}],
+                "body": {"data": body},
+            },
+        },
+    )
+    assert "cid:" not in gmail.fetch_full(db, "gid-1").body
+
+
+# --- הפרומפט של הסינון ---
+
+
+def test_the_prompt_says_a_bad_number_makes_a_report_relevant():
+    """⚠️ 23.11.2026: דוח יתרות עם יתרה שלילית של 9,611 ש״ח סווג
+    "לא חשוב", כי הפרומפט מנה "התראת מערכת אוטומטית" כדוגמה ללא-חשוב.
+    הסכום היה בשורת הפתיחה שהמודל ראה — זו הייתה בעיית ניסוח."""
+    assert "יתרה שלילית" in gmail.TRIAGE_PROMPT
+    # והדוגמה הגורפת הישנה אינה שם יותר
+    assert "התראת מערכת אוטומטית" not in gmail.TRIAGE_PROMPT

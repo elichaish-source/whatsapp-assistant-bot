@@ -175,6 +175,8 @@ export interface MailItem {
   is_client: boolean;
   unread: boolean;
   has_attachments: boolean;
+  // כמה הודעות בשרשור שהשורה מייצגת. 1 = מייל בודד
+  thread_count: number;
 }
 
 export interface MailList {
