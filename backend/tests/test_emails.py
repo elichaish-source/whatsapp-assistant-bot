@@ -9,13 +9,14 @@
 התיבה אחרי הפריסה, וזאת גם הסיבה שהמסך נבנה קודם בקריאה בלבד.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select, text
 
 from app import gauth, gmail
+from app.auth import now
 from app.db import SessionLocal
 from app.models import Client, Task
 
@@ -347,3 +348,129 @@ def test_truncation_counts_messages_and_not_rows(client, connected, monkeypatch)
     body = client.get("/api/emails").json()
     assert len(body["items"]) == rows
     assert body["truncated"] is True
+
+
+# --- חימום מסך המיילים ---
+#
+# נמדד מול התיבה האמיתית ב-24.11.2026: הסיווג הוא 9 מתוך 10 שניות
+# הטעינה, וההמתנה היא זמן תגובה קבוע של המודל. עם מטמון חם: 1.5 שניות.
+
+
+@pytest.fixture(autouse=True)
+def clean_warm_clock():
+    from app.bot import reminders
+
+    reminders.reset_warm_clock()
+    yield
+    reminders.reset_warm_clock()
+
+
+def test_the_warmup_classifies_the_inbox_ahead_of_time(db, connected, monkeypatch):
+    from app.bot import reminders
+
+    calls = []
+    monkeypatch.setattr(gmail, "list_screen", lambda *a, **k: [mail(1), mail(2)])
+    monkeypatch.setattr(
+        gmail, "triage", lambda emails, client_emails=None: calls.append(len(emails)) or []
+    )
+    assert reminders.warm_mail_screen(db) is True
+    assert calls == [2]
+
+
+def test_the_warmup_does_not_run_on_every_tick(db, connected, monkeypatch):
+    """⚠️ הלולאה רצה כל 30 שניות. בלי שעון, החימום היה קריאה בתשלום
+    כל חצי דקה."""
+    from app.bot import reminders
+
+    calls = []
+    monkeypatch.setattr(gmail, "list_screen", lambda *a, **k: [mail(1)])
+    monkeypatch.setattr(
+        gmail, "triage", lambda emails, client_emails=None: calls.append(1) or []
+    )
+    assert reminders.warm_mail_screen(db) is True
+    assert reminders.warm_mail_screen(db) is False
+    assert reminders.warm_mail_screen(db) is False
+    assert len(calls) == 1
+
+
+def test_the_warmup_runs_again_once_the_interval_passed(db, connected, monkeypatch):
+    from app.bot import reminders
+
+    calls = []
+    monkeypatch.setattr(gmail, "list_screen", lambda *a, **k: [mail(1)])
+    monkeypatch.setattr(
+        gmail, "triage", lambda emails, client_emails=None: calls.append(1) or []
+    )
+    assert reminders.warm_mail_screen(db) is True
+    later = now() + reminders.WARM_EVERY + timedelta(seconds=1)
+    assert reminders.warm_mail_screen(db, later) is True
+    assert len(calls) == 2
+
+
+def test_the_warmup_interval_is_shorter_than_the_cache_ttl():
+    """⚠️ אחרת נפתח חלון שבו המטמון פג והחימום עוד לא רץ — בדיוק המצב
+    שהחימום נועד למנוע."""
+    from app.bot import reminders
+
+    assert reminders.WARM_EVERY < gmail.TRIAGE_TTL
+
+
+def test_without_a_google_connection_nothing_is_warmed(db, monkeypatch):
+    from app.bot import reminders
+
+    monkeypatch.setattr(
+        gmail, "list_screen", lambda *a, **k: pytest.fail("אין לפנות לגוגל בלי חיבור")
+    )
+    assert reminders.warm_mail_screen(db) is False
+
+
+def test_an_empty_inbox_does_not_call_the_model(db, connected, monkeypatch):
+    from app.bot import reminders
+
+    monkeypatch.setattr(gmail, "list_screen", lambda *a, **k: [])
+    monkeypatch.setattr(gmail, "triage", lambda *a, **k: pytest.fail("אין מה לסווג"))
+    assert reminders.warm_mail_screen(db) is False
+
+
+def test_a_failed_warmup_does_not_retry_immediately(db, connected, monkeypatch):
+    """⚠️ בלי זה תקלה מתמשכת הייתה שורפת קריאה כל חצי דקה."""
+    from app.bot import reminders
+
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise gmail.GmailError("רשת")
+
+    monkeypatch.setattr(gmail, "list_screen", boom)
+    with pytest.raises(gmail.GmailError):
+        reminders.warm_mail_screen(db)
+    # הסבב הבא אינו מנסה שוב מיד
+    assert reminders.warm_mail_screen(db) is False
+    assert len(calls) == 1
+
+
+def test_a_failed_warmup_never_touches_the_reminders(db, connected, monkeypatch, sent):
+    """⚠️ החימום הוא נוחות ולא תלות: כשל שלו לא יעצור תזכורת."""
+    from app.bot import reminders
+
+    monkeypatch.setattr(
+        gmail, "list_screen", lambda *a, **k: (_ for _ in ()).throw(gmail.GmailError("רשת"))
+    )
+    # ‏_tick בולע את הכשל ואינו מתפוצץ
+    reminders._tick()
+
+
+def test_the_warmed_scope_is_the_one_the_screen_opens_on(db, connected, monkeypatch):
+    """חימום של חלון אחר לא היה עוזר למסך בכלל."""
+    from app.bot import reminders
+
+    seen = []
+
+    def spy(db_, scope, *a, **k):
+        seen.append(scope)
+        return []
+
+    monkeypatch.setattr(gmail, "list_screen", spy)
+    reminders.warm_mail_screen(db)
+    assert seen == ["week"]
