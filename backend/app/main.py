@@ -10,6 +10,7 @@ from .routers import (
     auth,
     bot,
     clients,
+    emails,
     google,
     lookups,
     memory,
@@ -44,7 +45,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-for module in (auth, lookups, clients, projects, tasks, recurrences, memory, google, bot):
+for module in (auth, lookups, clients, projects, tasks, recurrences, memory, google, emails, bot):
     app.include_router(module.router)
 
 
