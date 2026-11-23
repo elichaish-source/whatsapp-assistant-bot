@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import gauth, memory, notify, recurring, timeframe, waha
+from .. import gauth, gmail, memory, notify, recurring, timeframe, waha
 from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
@@ -151,8 +151,68 @@ def _tick() -> None:
         except Exception:  # noqa: BLE001 - תקלה בבדיקת גוגל לא עוצרת כלום
             log.exception("בדיקת החיבור לגוגל נכשלה")
             db.rollback()
+        try:
+            warm_mail_screen(db)
+        except Exception:  # noqa: BLE001 - חימום הוא נוחות, לא תלות
+            log.exception("חימום מסך המיילים נכשל")
+            db.rollback()
     finally:
         db.close()
+
+
+# --- חימום מסך המיילים ---
+
+# כל כמה זמן מסווגים את התיבה מראש. ⚠️ **קצר מ-``gmail.TRIAGE_TTL``
+# (חצי שעה) בכוונה**, אחרת היה נפתח חלון שבו המטמון פג והחימום עוד לא
+# רץ — בדיוק המצב שהחימום נועד למנוע.
+WARM_EVERY = timedelta(minutes=20)
+# איזה חלון זמן מחממים: זה שהמסך נפתח עליו כברירת מחדל. "היום" מוכל בו
+# ונהנה מאותו מטמון, ו"החודש" נשאר קר — הוא גם נפתח לעתים רחוקות
+WARM_SCOPE = "week"
+
+_warmed_at: datetime | None = None
+
+
+def warm_mail_screen(db: Session, moment: datetime | None = None) -> bool:
+    """מסווג מראש את הדואר הנכנס, כדי שהמסך ייפתח מהר.
+
+    ‏**למה זה נחוץ:** נמדד מול התיבה האמיתית ב-24.11.2026 — הסיווג הוא
+    ‏9 מתוך 10 שניות הטעינה, וההמתנה היא זמן תגובה קבוע של המודל שחלוקה
+    למנות מקבילות אינה מקצרת. עם מטמון חם המסך נטען ב-1.5 שניות.
+
+    ⚠️ **זו נוחות ולא תלות.** כל כשל נבלע: המסך פשוט ייטען קר, בדיוק
+    כמו קודם. בפרט, כישלון כאן לעולם אינו נוגע בתזכורות.
+
+    ⚠️ **המטמון חי בזיכרון התהליך**, והלולאה הזאת רצה באותו תהליך של
+    ה-API (‏uvicorn אחד, בלי ``--workers``). אם מישהו יוסיף תהליכי עבודה,
+    החימום יחמם מטמון של תהליך אחד בלבד והמסך יישאר איטי.
+
+    מחזיר True אם הסבב הזה באמת חימם.
+    """
+    global _warmed_at
+    moment = moment or now()
+    if _warmed_at is not None and moment - _warmed_at < WARM_EVERY:
+        return False
+
+    cred = gauth.get_credential(db)
+    if cred is None or cred.status != "connected":
+        return False
+
+    # מסומן לפני העבודה ולא אחריה: אם הסיווג ייכשל, אין טעם לנסות שוב
+    # בעוד שלושים שניות ולשרוף קריאות
+    _warmed_at = moment
+    found = gmail.list_screen(db, WARM_SCOPE)
+    if not found:
+        return False
+    gmail.triage(found, gmail.client_addresses(db))
+    log.info("מסך המיילים חומם: %d שורות", len(found))
+    return True
+
+
+def reset_warm_clock() -> None:
+    """לבדיקות: מאפס את השעון כדי שהחימום הבא ירוץ."""
+    global _warmed_at
+    _warmed_at = None
 
 
 def watch_google(db: Session, moment: datetime | None = None) -> bool:
