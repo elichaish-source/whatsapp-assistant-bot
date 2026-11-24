@@ -20,12 +20,21 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import gauth, gmail
 from ..auth import require_user
 from ..db import get_db
-from ..schemas import EmailBodyOut, EmailIdsIn, EmailIdsOut, EmailItemOut, EmailListOut
+from ..models import Client
+from ..schemas import (
+    EmailBodyOut,
+    EmailIdsIn,
+    EmailIdsOut,
+    EmailItemOut,
+    EmailListOut,
+    TaskDraftOut,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/emails", tags=["emails"], dependencies=[Depends(require_user)])
@@ -145,6 +154,45 @@ def _write(db: Session, action, ids: list[str]) -> list[str]:
     except (gmail.GmailError, gauth.GoogleError) as exc:
         log.warning("שינוי תוויות נכשל: %s", exc)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+
+
+@router.get("/{message_id}/task-draft", response_model=TaskDraftOut)
+def task_draft(message_id: str, db: Session = Depends(get_db)) -> TaskDraftOut:
+    """הצעה למשימה מתוך המייל (שלב 4-5).
+
+    ⚠️ **אינה שומרת כלום.** הטופס נפתח מלא מראש, והמשימה נוצרת רק
+    בלחיצה על "שמור" — זה היתרון המרכזי של המסך על הבוט, כי הפיכת מייל
+    למשימה כמעט תמיד דורשת עריכה.
+
+    ⚠️ **הלקוח נקבע בקוד ולא במודל**, לפי כתובת השולח מול כרטיסי
+    הלקוחות: שיוך הוא עובדה שיש עליה נתונים, לא שיקול דעת.
+    """
+    _require_connection(db)
+    try:
+        mail = gmail.fetch_full(db, message_id)
+    except gauth.GoogleDisconnected as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DISCONNECTED) from exc
+    except (gmail.GmailError, gauth.GoogleError) as exc:
+        log.warning("שליפת מייל לטיוטת משימה נכשלה: %s", exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+
+    draft = gmail.task_draft(mail)
+    sender = mail.sender_email.strip().lower()
+    client_id = None
+    if sender:
+        client_id = db.scalars(
+            select(Client.id).where(func.lower(Client.email) == sender).limit(1)
+        ).first()
+
+    link = gmail.gmail_link(mail.id)
+    notes = "\n".join(part for part in (draft.summary, f"מהמייל של {mail.sender()}", link) if part)
+    return TaskDraftOut(
+        title=draft.title,
+        due_date=draft.due_date or None,
+        client_id=client_id,
+        notes=notes,
+        email_message_id=mail.id,
+    )
 
 
 @router.get("/{message_id}", response_model=EmailBodyOut)

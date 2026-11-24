@@ -147,8 +147,11 @@ def _log_changes(task: Task, before: dict, after: dict) -> None:
 def create_task(body: TaskIn, db: Session = Depends(get_db)):
     data = resolve_task_fields(db, body)
     new_status = data.pop("status")
-    # source = dashboard: "נוצרה ישירות מהמערכת". הבוט קובע whatsapp בעצמו
-    task = Task(**data, status="open", source="dashboard")
+    # source = dashboard: "נוצרה ישירות מהמערכת". הבוט קובע whatsapp בעצמו.
+    # ⚠️ ``email`` נקבע מהנוכחות של מזהה המייל ולא משדה שהלקוח שולח, כדי
+    # שהמקור ישקף את מה שבאמת קרה ולא את מה שהוצהר
+    source = "email" if data.get("email_message_id") else "dashboard"
+    task = Task(**data, status="open", source=source)
     timeframe.set_priority(task, task.priority)
     _set_status(task, new_status)
     db.add(task)

@@ -122,6 +122,9 @@ class TaskIn(BaseModel):
     reminder_at: datetime | None = None
     priority: Priority = "week"
     notes: str | None = None
+    # המייל שממנו נוצרה המשימה (שלב 4-5). ⚠️ מזהה בלבד ולא תוכן, ומה
+    # שנשמר בכותרת ובהערות הוא מה שהמשתמש אישר בטופס
+    email_message_id: str | None = Field(default=None, max_length=100)
 
     _clean = field_validator("notes", mode="before")(_blank_to_none)
 
@@ -140,6 +143,8 @@ class TaskOut(ORMModel):
     priority: Priority
     notes: str | None
     source: TaskSource
+    # ריק בכל משימה שלא נוצרה ממייל. ממנו נבנה הקישור חזרה לג'ימייל
+    email_message_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -341,3 +346,15 @@ class EmailBodyOut(BaseModel):
     body: str
     attachments: list[str] = []
     quoted_removed: bool = False
+
+
+class TaskDraftOut(BaseModel):
+    """הצעה למשימה ממייל (שלב 4-5). ⚠️ **אינה נשמרת** — הטופס נפתח
+    מלא מראש, והמשימה נוצרת רק בלחיצה על "שמור"."""
+
+    title: str
+    due_date: date | None = None
+    # לפי כתובת השולח מול כרטיסי הלקוחות. ⚠️ נקבע בקוד ולא במודל
+    client_id: int | None = None
+    notes: str = ""
+    email_message_id: str = ""

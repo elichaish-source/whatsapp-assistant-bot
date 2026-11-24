@@ -3,9 +3,17 @@ import { Link } from "react-router-dom";
 import { ApiError, api, query } from "../api";
 import MailRow from "../components/MailRow";
 import Modal from "../components/Modal";
+import TaskForm from "../components/TaskForm";
 import { formatWhen } from "../format";
 import { linkify } from "../linkify";
-import { MAIL_SCOPE_LABELS, type MailBody, type MailItem, type MailList, type MailScope } from "../types";
+import {
+  MAIL_SCOPE_LABELS,
+  type MailBody,
+  type MailItem,
+  type MailList,
+  type MailScope,
+  type TaskDraft,
+} from "../types";
 
 /** לשוניות הסינון. פותחים על "חשוב" — זה הסינון שהמשתמש ביקש לראות ראשון */
 type Tab = "important" | "other" | "all";
@@ -26,6 +34,8 @@ export default function Mail() {
   // נשארים בארכיון ולא נמחקים
   const [undo, setUndo] = useState<{ rows: MailItem[]; ids: string[] } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // הטיוטה שממתינה לאישור בטופס. ⚠️ עד "שמור" לא נוצר כלום
+  const [drafting, setDrafting] = useState<{ item: MailItem; draft: TaskDraft } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +125,24 @@ export default function Mail() {
     try {
       await api("/emails/unarchive", { method: "POST", body: { ids } });
       rows.forEach((row) => drop(row, false));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * "הפוך למשימה": שואל מהשרת הצעה, ופותח את טופס המשימה הקיים מלא
+   * מראש. ⚠️ **לא נוצר כלום עד שלוחצים "שמור"** — הפיכת מייל למשימה
+   * כמעט תמיד דורשת עריכה, וזה היתרון של המסך על הבוט.
+   */
+  const toTask = async (item: MailItem) => {
+    setBusy(item.id);
+    setError("");
+    try {
+      const d = await api<TaskDraft>(`/emails/${encodeURIComponent(item.id)}/task-draft`);
+      setDrafting({ item, draft: d });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -284,9 +312,35 @@ export default function Mail() {
                 <button disabled={busy === opening.id} onClick={() => archive([opening])}>
                   ארכוב
                 </button>
+                <button disabled={busy === opening.id} onClick={() => toTask(opening)}>
+                  {busy === opening.id ? "מכין…" : "הפוך למשימה"}
+                </button>
               </div>
             </div>
           )}
+        </Modal>
+      )}
+
+      {/* טופס המשימה הקיים, מלא מראש מהמייל. ⚠️ עד "שמור" לא נוצר כלום */}
+      {drafting && (
+        <Modal title="משימה מהמייל" onClose={() => setDrafting(null)}>
+          <TaskForm
+            defaults={{
+              title: drafting.draft.title,
+              due_date: drafting.draft.due_date,
+              notes: drafting.draft.notes,
+              client_id: drafting.draft.client_id,
+              email_message_id: drafting.draft.email_message_id,
+            }}
+            onSaved={async () => {
+              const item = drafting.item;
+              setDrafting(null);
+              // ⚠️ הארכוב אחרי השמירה, ורק אחריה. אם הוא ייכשל המשימה
+              // כבר קיימת ונשארת — למחוק משימה בגלל תקלת רשת גרוע בהרבה
+              await archive([item]);
+            }}
+            onCancel={() => setDrafting(null)}
+          />
         </Modal>
       )}
     </div>

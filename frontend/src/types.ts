@@ -205,3 +205,16 @@ export interface MailBody {
   // האם נחתכה היסטוריה מצוטטת. נאמר למשתמש, כדי שידע שיש עוד
   quoted_removed: boolean;
 }
+
+/**
+ * הצעה למשימה מתוך מייל (שלב 4-5).
+ * ⚠️ אינה נשמרת: הטופס נפתח מלא מראש, והמשימה נוצרת רק בלחיצה על "שמור".
+ */
+export interface TaskDraft {
+  title: string;
+  due_date: string | null;
+  // לפי כתובת השולח מול כרטיסי הלקוחות. נקבע בשרת ולא במודל
+  client_id: number | null;
+  notes: string;
+  email_message_id: string;
+}

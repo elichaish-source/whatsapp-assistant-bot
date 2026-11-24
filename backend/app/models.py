@@ -139,6 +139,9 @@ class Task(TimestampMixin, Base):
     recurrence_id: Mapped[int | None] = mapped_column(
         ForeignKey("recurrences.id", ondelete="SET NULL")
     )
+    # המייל שממנו נוצרה המשימה (שלב 4-5). ⚠️ **מזהה בלבד ולא תוכן** —
+    # ממנו נבנה הקישור חזרה לג'ימייל, והמייל עצמו נקרא מגוגל בכל פעם
+    email_message_id: Mapped[str | None] = mapped_column(String(100))
 
 
 # --- כניסה לדשבורד ---

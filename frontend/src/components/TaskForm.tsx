@@ -8,6 +8,12 @@ export interface TaskDefaults {
   client_id?: number | null;
   project_id?: number | null;
   domain_id?: number | null;
+  // מילוי מראש מתוך מייל (שלב 4-5).
+  // ⚠️ הצעה בלבד — המשימה נוצרת רק בלחיצה על "שמור"
+  title?: string;
+  due_date?: string | null;
+  notes?: string;
+  email_message_id?: string;
 }
 
 const toId = (v: string) => (v ? Number(v) : null);
@@ -27,16 +33,16 @@ export default function TaskForm({
   // משימה חדשה בתוך פרויקט מקבלת את התחום והלקוח שלו
   const defaultProject = projects.find((p) => p.id === defaults?.project_id);
   const [form, setForm] = useState({
-    title: task?.title ?? "",
+    title: task?.title ?? defaults?.title ?? "",
     status: task?.status ?? "open",
     domain_id: task?.domain_id ?? defaults?.domain_id ?? defaultProject?.domain_id ?? null,
     task_type_id: task?.task_type_id ?? null,
     client_id: task?.client_id ?? defaults?.client_id ?? defaultProject?.client_id ?? null,
     project_id: task?.project_id ?? defaults?.project_id ?? null,
-    due_date: task?.due_date ?? "",
+    due_date: task?.due_date ?? defaults?.due_date ?? "",
     reminder_at: toLocalInput(task?.reminder_at ?? null),
     priority: (task?.priority ?? "week") as Priority,
-    notes: task?.notes ?? "",
+    notes: task?.notes ?? defaults?.notes ?? "",
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -78,6 +84,9 @@ export default function TaskForm({
       ...form,
       due_date: form.due_date || null,
       reminder_at: fromLocalInput(form.reminder_at),
+      // ⚠️ רק ביצירה ממייל. השרת גוזר ממנו source=email, כדי שהמקור
+      // ישקף את מה שבאמת קרה ולא את מה שהוצהר
+      email_message_id: task ? undefined : (defaults?.email_message_id ?? undefined),
     };
     try {
       await api(task ? `/tasks/${task.id}` : "/tasks", { method: task ? "PUT" : "POST", body });
