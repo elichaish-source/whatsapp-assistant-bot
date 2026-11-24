@@ -334,7 +334,9 @@ def test_only_the_uncached_mails_are_sent_to_the_model(monkeypatch):
 
     def counted(emails):
         sent.append([item.id for item in emails])
-        return {index: (True, f"שורה {item.id}") for index, item in enumerate(emails, start=1)}
+        return {
+            index: (True, f"שורה {item.id}", False) for index, item in enumerate(emails, start=1)
+        }
 
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
     monkeypatch.setattr(gmail, "_ask_haiku", counted)
