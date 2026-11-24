@@ -410,10 +410,24 @@ def _complete_task(db: Session, intent: Intent) -> Outcome:
 _PREFIXES = "הלבומשכ"
 
 
-def _words(text: str, strip_prefix: bool = False) -> list[str]:
+# ⚠️ **צורת הסמיכות.** בעברית שם עצם נקבי מסיים ב-ה׳ וצורת הסמיכות שלו
+# ב-ת׳: "בדיקה" מול "בדיקת", "חברה" מול "חברת". ‏17.11.2026 נמצא מול
+# הודעה אמיתית ש"תדחה את בדיקת הבוט" לא מצא משימה בשם "בדיקה שנייה של
+# הבוט", כי כל מילה חייבת להופיע ככתבה. חיתוך האות האחרונה משווה את
+# שתי הצורות לאותו גזע.
+_CONSTRUCT_END = "הת"
+# קצר מזה והחיתוך מזיק: "את", "זה", "שלה" הופכים לרעש שמתאים לכל דבר
+_CONSTRUCT_MIN = 4
+
+
+def _words(text: str, strip_prefix: bool = False, strip_end: bool = False) -> list[str]:
     words = [word for word in text.split() if word != "את"]
     if strip_prefix:
         words = [w[1:] if len(w) > 3 and w[0] in _PREFIXES else w for w in words]
+    if strip_end:
+        words = [
+            w[:-1] if len(w) >= _CONSTRUCT_MIN and w[-1] in _CONSTRUCT_END else w for w in words
+        ]
     return words
 
 
@@ -430,12 +444,19 @@ def _find_open(db: Session, text: str) -> list[Task]:
     """משימות פתוחות שכל מילות החיפוש מופיעות בכותרת שלהן.
 
     מילה-מילה ולא כמחרוזת אחת, כי המשתמש לא מצטט את הכותרת: "הדוח של טיפ
-    טופ" צריך למצוא "לטפל בדוח של טיפ טופ". כשאין התאמה יש ניסיון שני,
-    בלי אות השימוש שבראש כל מילה. מילה מקוצרת היא תמיד חלק מהמילה המלאה,
-    ולכן הניסיון השני רק מרחיב ואף פעם לא מפספס את מה שהראשון מצא.
+    טופ" צריך למצוא "לטפל בדוח של טיפ טופ".
+
+    **שלושה ניסיונות, מהצר לרחב:** ככתבו; בלי אות השימוש שבראש כל מילה;
+    ובלי האות האחרונה כשהיא ה׳ או ת׳ — ⚠️ **צורת הסמיכות**, שבגללה
+    "בדיקת הבוט" לא מצא "בדיקה שנייה של הבוט" (נמצא 17.11.2026).
+
+    ⚠️ **ההרחבה בטוחה דווקא בגלל הסדר:** ניסיון רחב רץ רק כשהצר לא מצא
+    כלום, ולכן הוא יכול רק להפוך "לא נמצא" ל"נמצא". ומכיוון
+    ש-``_locate`` לעולם אינו בוחר לבד מבין כמה התאמות, הרחבה גרועה
+    מובילה לשאלה ולא לשינוי שקט במשימה הלא נכונה.
     """
-    for strip in (False, True):
-        words = _words(text, strip)
+    for strip_prefix, strip_end in ((False, False), (True, False), (True, True)):
+        words = _words(text, strip_prefix, strip_end)
         if not words:
             return []
         stmt = select(Task).where(Task.status == "open")
@@ -493,6 +514,29 @@ _UNDO_FIELDS = (
 )
 _UNDO_DATES = ("due_date", "priority_set_on")
 _UNDO_TIMES = ("reminder_at", "reminder_sent_at")
+
+# ⚠️ מה באמת השתנה, בשם שהמשתמש מכיר. נמצא 17.11.2026: התשובה על
+# הוספת הערה אמרה רק "עודכן: <כותרת>", ולא היה שום רמז למה שנשמר —
+# כלומר אי אפשר היה לדעת אם ההערה נקלטה או נבלעה.
+# השדות הפנימיים (``reminder_sent_at``, ``priority_set_on``) אינם כאן
+# בכוונה: הם תוצאה של שינוי אחר ולא שינוי שהמשתמש ביקש
+_CHANGE_NAMES = {
+    "title": "הכותרת",
+    "notes": "ההערות",
+    "due_date": "תאריך היעד",
+    "reminder_at": "התזכורת",
+    "priority": "מסגרת הזמן",
+    "client_id": "הלקוח",
+    "project_id": "הפרויקט",
+    "domain_id": "התחום",
+    "task_type_id": "סוג המשימה",
+}
+
+
+def changed_names(changed: list[str]) -> str:
+    """שמות השדות שהשתנו, לתשובה למשתמש. ריק כשרק שדות פנימיים זזו."""
+    names = [_CHANGE_NAMES[field] for field in changed if field in _CHANGE_NAMES]
+    return " ו".join([", ".join(names[:-1]), names[-1]] if len(names) > 1 else names)
 
 
 def _snapshot(task: Task) -> dict:
@@ -600,7 +644,10 @@ def _update_task(db: Session, intent: Intent) -> Outcome:
         + ", ".join(f"{field}: {before[field]} → {after[field]}" for field in changed),
     )
     detail = describe(db, task)
-    reply = f"עודכן: {task.title}" + (f"\n{detail}" if detail else "")
+    # ⚠️ מה השתנה, ולא רק הכותרת: בלי זה אי אפשר לדעת אם ההערה נקלטה
+    what = changed_names(changed)
+    headline = f"עודכן ב{what}: {task.title}" if what else f"עודכן: {task.title}"
+    reply = headline + (f"\n{detail}" if detail else "")
     return Outcome(
         reply + '\nלביטול כתוב "בטל".',
         task_id=task.id,

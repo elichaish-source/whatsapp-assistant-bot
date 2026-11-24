@@ -79,7 +79,9 @@ def test_update_finds_a_dashboard_task_by_a_word_from_its_title(db, say):
     row = say(Intent(action="update_task", task_text="ביטוח", due_date=next_week()))
     db.refresh(task)
     assert task.due_date == today() + timedelta(days=7)
-    assert "עודכן: לחדש את הביטוח" in row.reply
+    # ⚠️ התשובה אומרת גם מה השתנה, ולא רק את הכותרת (תוקן 24.11.2026)
+    assert "לחדש את הביטוח" in row.reply
+    assert "תאריך היעד" in row.reply
     assert row.task_id == task.id
 
 
@@ -487,3 +489,75 @@ def test_the_new_actions_reached_the_schema():
     for name in ("update_task", "delete_task", "confirm", "decline"):
         assert name in actions_in_schema
         Intent(action=name)
+
+
+# --- שלושת הממצאים מ-17.11.2026, שנסגרו 24.11.2026 ---
+
+
+def test_a_construct_form_finds_the_task(db):
+    """🚨 הממצא עצמו: "תדחה את בדיקת הבוט" לא מצא "בדיקה שנייה של הבוט".
+
+    בעברית שם עצם נקבי מסיים ב-ה׳ וצורת הסמיכות שלו ב-ת׳, והקוד דרש
+    שכל מילה תופיע ככתבה.
+    """
+    from app.bot import actions
+
+    db.add(Task(title="בדיקה שנייה של הבוט", status="open"))
+    db.commit()
+    assert [t.title for t in actions._find_open(db, "בדיקת הבוט")] == ["בדיקה שנייה של הבוט"]
+
+
+def test_the_other_direction_works_too(db):
+    """גם כשהכותרת בסמיכות והחיפוש לא."""
+    from app.bot import actions
+
+    db.add(Task(title="להגיש את בדיקת הדוחות", status="open"))
+    db.commit()
+    assert actions._find_open(db, "בדיקה הדוחות")
+
+
+def test_an_exact_match_still_wins_first(db):
+    """⚠️ ההרחבה רצה רק כשהצר לא מצא כלום, ולכן אינה משנה התאמות קיימות."""
+    from app.bot import actions
+
+    db.add(Task(title="לשלם לחברת החשמל", status="open"))
+    db.add(Task(title="לבדוק חברה חדשה", status="open"))
+    db.commit()
+    found = actions._find_open(db, "חברת החשמל")
+    assert [t.title for t in found] == ["לשלם לחברת החשמל"]
+
+
+def test_short_words_are_not_chopped(db):
+    """⚠️ "את", "זה", "שלה" — חיתוך בהם הופך אותם לרעש שמתאים לכל דבר."""
+    from app.bot import actions
+
+    assert actions._words("שלה זה", strip_end=True) == ["שלה", "זה"]
+    assert actions._words("בדיקת", strip_end=True) == ["בדיק"]
+
+
+def test_the_reply_says_which_field_changed():
+    """🚨 הממצא: "עודכן: <כותרת>" לא אמר אם ההערה בכלל נקלטה."""
+    from app.bot import actions
+
+    assert actions.changed_names(["notes"]) == "ההערות"
+    assert actions.changed_names(["due_date", "notes"]) == "תאריך היעד וההערות"
+    assert "מסגרת הזמן" in actions.changed_names(["priority"])
+
+
+def test_internal_fields_are_not_reported_as_changes():
+    """⚠️ reminder_sent_at ו-priority_set_on הם תוצאה של שינוי אחר,
+    ולא משהו שהמשתמש ביקש — ואמירה עליהם רק מבלבלת."""
+    from app.bot import actions
+
+    assert actions.changed_names(["reminder_sent_at", "priority_set_on"]) == ""
+
+
+def test_the_prompt_forbids_rewording_what_the_user_wrote():
+    """🚨 הממצא: המודל השמיט מילה מכותרת ו"תיקן" שגיאות כתיב בהערה.
+
+    מה שהמשתמש כתב הוא מה שהוא יחפש בעוד שבועיים.
+    """
+    from app.bot import intent
+
+    assert "אל תשפר ניסוח" in intent.SYSTEM_PROMPT
+    assert "אל תתקן שגיאות כתיב" in intent.SYSTEM_PROMPT
