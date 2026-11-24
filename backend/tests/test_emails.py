@@ -373,7 +373,7 @@ def test_the_warmup_classifies_the_inbox_ahead_of_time(db, connected, monkeypatc
     monkeypatch.setattr(
         gmail, "triage", lambda emails, client_emails=None: calls.append(len(emails)) or []
     )
-    assert reminders.warm_mail_screen(db) is True
+    assert reminders.warm_mail_screen(db) is not None
     assert calls == [2]
 
 
@@ -387,9 +387,9 @@ def test_the_warmup_does_not_run_on_every_tick(db, connected, monkeypatch):
     monkeypatch.setattr(
         gmail, "triage", lambda emails, client_emails=None: calls.append(1) or []
     )
-    assert reminders.warm_mail_screen(db) is True
-    assert reminders.warm_mail_screen(db) is False
-    assert reminders.warm_mail_screen(db) is False
+    assert reminders.warm_mail_screen(db) is not None
+    assert reminders.warm_mail_screen(db) is None
+    assert reminders.warm_mail_screen(db) is None
     assert len(calls) == 1
 
 
@@ -401,9 +401,9 @@ def test_the_warmup_runs_again_once_the_interval_passed(db, connected, monkeypat
     monkeypatch.setattr(
         gmail, "triage", lambda emails, client_emails=None: calls.append(1) or []
     )
-    assert reminders.warm_mail_screen(db) is True
+    assert reminders.warm_mail_screen(db) is not None
     later = now() + reminders.WARM_EVERY + timedelta(seconds=1)
-    assert reminders.warm_mail_screen(db, later) is True
+    assert reminders.warm_mail_screen(db, later) is not None
     assert len(calls) == 2
 
 
@@ -421,7 +421,7 @@ def test_without_a_google_connection_nothing_is_warmed(db, monkeypatch):
     monkeypatch.setattr(
         gmail, "list_screen", lambda *a, **k: pytest.fail("אין לפנות לגוגל בלי חיבור")
     )
-    assert reminders.warm_mail_screen(db) is False
+    assert reminders.warm_mail_screen(db) is None
 
 
 def test_an_empty_inbox_does_not_call_the_model(db, connected, monkeypatch):
@@ -429,7 +429,9 @@ def test_an_empty_inbox_does_not_call_the_model(db, connected, monkeypatch):
 
     monkeypatch.setattr(gmail, "list_screen", lambda *a, **k: [])
     monkeypatch.setattr(gmail, "triage", lambda *a, **k: pytest.fail("אין מה לסווג"))
-    assert reminders.warm_mail_screen(db) is False
+    # ⚠️ רשימה ריקה ולא None: הסבב **כן** רץ, פשוט אין מה לסווג.
+    # ‏None שמור ל"לא רץ הפעם", ועליו הלולאה מדלגת
+    assert reminders.warm_mail_screen(db) == []
 
 
 def test_a_failed_warmup_does_not_retry_immediately(db, connected, monkeypatch):
@@ -446,7 +448,7 @@ def test_a_failed_warmup_does_not_retry_immediately(db, connected, monkeypatch):
     with pytest.raises(gmail.GmailError):
         reminders.warm_mail_screen(db)
     # הסבב הבא אינו מנסה שוב מיד
-    assert reminders.warm_mail_screen(db) is False
+    assert reminders.warm_mail_screen(db) is None
     assert len(calls) == 1
 
 
@@ -956,12 +958,12 @@ def test_replies_are_prepared_only_at_the_chosen_hours(db, connected, monkeypatc
     monkeypatch.setattr(reminders, "_prepare_hours", lambda: {7})
 
     at_nine = now().astimezone(IL).replace(hour=9, minute=0)
-    assert reminders.prepare_drafts(db, at_nine)[1] == 0
+    assert reminders.prepare_drafts(db, moment=at_nine)[1] == 0
     assert no_models["reply"] == 0
 
     gmail.clear_prepared()
     at_seven = now().astimezone(IL).replace(hour=7, minute=0)
-    assert reminders.prepare_drafts(db, at_seven)[1] == 1
+    assert reminders.prepare_drafts(db, moment=at_seven)[1] == 1
     assert no_models["reply"] == 1
 
 
@@ -972,7 +974,7 @@ def test_a_mail_that_needs_no_reply_gets_no_reply_draft(db, connected, monkeypat
     triaged_as(monkeypatch, [mail(1)], needs_reply_ids=set())
     monkeypatch.setattr(reminders, "_prepare_hours", lambda: {7})
     at_seven = now().astimezone(IL).replace(hour=7, minute=0)
-    reminders.prepare_drafts(db, at_seven)
+    reminders.prepare_drafts(db, moment=at_seven)
     assert no_models["reply"] == 0
     # אבל טיוטת המשימה כן הוכנה
     assert no_models["task"] == 1
@@ -1049,3 +1051,49 @@ def test_the_configured_hours_are_read_from_settings(monkeypatch):
     assert reminders._prepare_hours() == {7, 12, 17}
     monkeypatch.setattr(gmail.get_settings(), "reply_prepare_hours", "6, 18 ,99,לא")
     assert reminders._prepare_hours() == {6, 18}
+
+
+def test_the_preparation_does_not_fetch_the_mailbox_on_every_tick(db, connected, monkeypatch, no_models):
+    """⚠️⚠️ באג שנתפס לפני שהגיע לשימוש: ההכנה רצה בכל טיק (כל 30
+    שניות) ושלפה את התיבה מגוגל בעצמה — שליפה מלאה פעמיים בדקה.
+
+    עכשיו החימום מחזיר את השורות המסווגות וההכנה רוכבת עליהן, ולכן
+    הלולאה פונה לגוגל רק כשהחימום באמת רץ (פעם ב-20 דקות).
+    """
+    from app.bot import reminders
+
+    fetches = []
+
+    def counted(db_, scope, *a, **k):
+        fetches.append(scope)
+        return [mail(1)]
+
+    monkeypatch.setattr(gmail, "list_screen", counted)
+    monkeypatch.setattr(
+        gmail,
+        "triage",
+        lambda emails, client_emails=None: [
+            gmail.Triaged(email=item, relevant=True, line="שורה") for item in emails
+        ],
+    )
+    reminders.reset_warm_clock()
+    reminders._tick()
+    reminders._tick()
+    reminders._tick()
+    # שלושה טיקים, שליפה אחת
+    assert len(fetches) == 1
+
+
+def test_the_warmup_hands_its_rows_to_the_preparation(db, connected, monkeypatch, no_models):
+    """⚠️ שליפה אחת לשניהם, ולא אחת לכל אחד."""
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    reminders.reset_warm_clock()
+    rows = reminders.warm_mail_screen(db)
+    assert rows and len(rows) == 1
+    # ההכנה מקבלת אותן ואינה שולפת שוב
+    monkeypatch.setattr(
+        gmail, "list_screen", lambda *a, **k: pytest.fail("אין לשלוף שוב")
+    )
+    assert reminders.prepare_drafts(db, rows)[0] == 1

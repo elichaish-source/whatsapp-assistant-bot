@@ -152,14 +152,14 @@ def _tick() -> None:
             log.exception("בדיקת החיבור לגוגל נכשלה")
             db.rollback()
         try:
-            warm_mail_screen(db)
-        except Exception:  # noqa: BLE001 - חימום הוא נוחות, לא תלות
-            log.exception("חימום מסך המיילים נכשל")
-            db.rollback()
-        try:
-            prepare_drafts(db)
-        except Exception:  # noqa: BLE001 - הכנה היא נוחות, לא תלות
-            log.exception("הכנת הטיוטות נכשלה")
+            # ⚠️ שליפה אחת מגוגל לשניהם: החימום מחזיר את השורות
+            # המסווגות, וההכנה רוכבת עליהן. בלי זה ההכנה הייתה שולפת
+            # את התיבה בכל טיק, כלומר פעמיים בדקה
+            triaged = warm_mail_screen(db)
+            if triaged:
+                prepare_drafts(db, triaged)
+        except Exception:  # noqa: BLE001 - חימום והכנה הם נוחות, לא תלות
+            log.exception("חימום המסך או הכנת הטיוטות נכשלו")
             db.rollback()
     finally:
         db.close()
@@ -178,7 +178,7 @@ WARM_SCOPE = "week"
 _warmed_at: datetime | None = None
 
 
-def warm_mail_screen(db: Session, moment: datetime | None = None) -> bool:
+def warm_mail_screen(db: Session, moment: datetime | None = None) -> list | None:
     """מסווג מראש את הדואר הנכנס, כדי שהמסך ייפתח מהר.
 
     ‏**למה זה נחוץ:** נמדד מול התיבה האמיתית ב-24.11.2026 — הסיווג הוא
@@ -192,26 +192,28 @@ def warm_mail_screen(db: Session, moment: datetime | None = None) -> bool:
     ה-API (‏uvicorn אחד, בלי ``--workers``). אם מישהו יוסיף תהליכי עבודה,
     החימום יחמם מטמון של תהליך אחד בלבד והמסך יישאר איטי.
 
-    מחזיר True אם הסבב הזה באמת חימם.
+    ⚠️ **מחזיר את השורות המסווגות, ולא רק True.** הלולאה מעבירה אותן
+    ל-``prepare_drafts``, כדי שהשליפה מגוגל והסיווג יקרו **פעם אחת**
+    ויגישו לשניהם. ‏None פירושו "לא רץ הפעם".
     """
     global _warmed_at
     moment = moment or now()
     if _warmed_at is not None and moment - _warmed_at < WARM_EVERY:
-        return False
+        return None
 
     cred = gauth.get_credential(db)
     if cred is None or cred.status != "connected":
-        return False
+        return None
 
     # מסומן לפני העבודה ולא אחריה: אם הסיווג ייכשל, אין טעם לנסות שוב
     # בעוד שלושים שניות ולשרוף קריאות
     _warmed_at = moment
     found = gmail.list_screen(db, WARM_SCOPE)
     if not found:
-        return False
-    gmail.triage(found, gmail.client_addresses(db))
+        return []
+    triaged = gmail.triage(found, gmail.client_addresses(db))
     log.info("מסך המיילים חומם: %d שורות", len(found))
-    return True
+    return triaged
 
 
 def reset_warm_clock() -> None:
@@ -250,7 +252,9 @@ def _newer_than(rows, since: datetime | None):
     return [item for item in rows if item.received_at > aware(since)]
 
 
-def prepare_drafts(db: Session, moment: datetime | None = None) -> tuple[int, int]:
+def prepare_drafts(
+    db: Session, triaged: list | None = None, moment: datetime | None = None
+) -> tuple[int, int]:
     """מכין מראש טיוטת משימה לכל מייל חדש, וטיוטות מענה בשעות שנקבעו.
 
     ⚠️⚠️ **"טיוטה אחת לכל מייל, אי פעם" — זה מה שמגביל את העלות.**
@@ -271,10 +275,16 @@ def prepare_drafts(db: Session, moment: datetime | None = None) -> tuple[int, in
     if cred is None or cred.status != "connected":
         return 0, 0
 
-    rows = gmail.list_screen(db, reminders_scope())
-    if not rows:
+    # ⚠️ השורות מגיעות מהחימום ולא נשלפות שוב. בגרסה הראשונה ההכנה
+    # שלפה מגוגל בעצמה, ומכיוון שהיא רצה בכל טיק (כל 30 שניות) זו
+    # הייתה שליפה מלאה מהתיבה פעמיים בדקה
+    if triaged is None:
+        rows = gmail.list_screen(db, WARM_SCOPE)
+        if not rows:
+            return 0, 0
+        triaged = gmail.triage(rows, gmail.client_addresses(db))
+    if not triaged:
         return 0, 0
-    triaged = gmail.triage(rows, gmail.client_addresses(db))
 
     tasks_made = 0
     for item in _newer_than([t.email for t in triaged if t.relevant], cred.last_prepared_at):
@@ -310,8 +320,3 @@ def prepare_drafts(db: Session, moment: datetime | None = None) -> tuple[int, in
     if tasks_made or replies_made:
         log.info("הוכנו מראש: %d משימות, %d מענים", tasks_made, replies_made)
     return tasks_made, replies_made
-
-
-def reminders_scope() -> str:
-    """החלון שמכינים עליו. זהה לזה שהמסך נפתח עליו."""
-    return WARM_SCOPE
