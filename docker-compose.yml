@@ -78,6 +78,10 @@ services:
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:?חסר DOMAIN ב-.env}
+      # ⚠️ כתובת נוספת שתוגש במקביל, לזמן מעבר בין דומיינים. ריקה
+      # ברגיל, ואז הבלוק מצביע ל-.localhost ו-Caddy אינו פונה
+      # ל-Let's Encrypt — בדיוק כמו NTFY_DOMAIN
+      EXTRA_DOMAIN: ${EXTRA_DOMAIN:-old.localhost}
       NTFY_DOMAIN: ${NTFY_DOMAIN:-ntfy.localhost}
     ports:
       - "80:80"
