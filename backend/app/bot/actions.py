@@ -821,6 +821,9 @@ _LIST_ACTIONS = ("add_domain", "add_task_type", "pause_recurrence", "resume_recu
 # קריאה מהתיבה. אינן נכללות ב-_UNDOABLE: קריאה אינה משנה דבר, ולכן
 # "בטל" אחרי רשימת מיילים צריך להמשיך אחורה למה שכן שונה
 _EMAIL_ACTIONS = ("list_emails", "search_emails", "show_email", "email_not_yet")
+# קריאה מהיומן. גם היא אינה נכללת ב-_UNDOABLE, מאותה סיבה: היא אינה
+# משנה דבר, ולכן "בטל" אחריה צריך להמשיך אחורה למה שכן שונה
+_EVENT_ACTIONS = ("list_events",)
 # confirm נכלל בגלל יצירה שאושרה ("ליצור בכל זאת?" ואז "כן"). מחיקה שאושרה
 # לא משאירה אחריה מה לבטל, ולכן השורה שלה לא נמצאת בחיפוש שלמטה
 _UNDOABLE = (
@@ -1070,6 +1073,10 @@ def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcom
         from . import emails
 
         return getattr(emails, intent.action)(db, intent)
+    if intent.action in _EVENT_ACTIONS:
+        from . import events
+
+        return getattr(events, intent.action)(db, intent)
     if intent.action == "add_task":
         return _add_task(db, intent)
     if intent.action == "add_recurring":
