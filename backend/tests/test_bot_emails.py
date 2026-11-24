@@ -533,11 +533,76 @@ def test_show_email_does_not_void_the_numbering(db, connected, monkeypatch):
     assert outcome.clear_list is False
 
 
-def test_the_quoted_history_notice_is_shown_when_something_was_cut(db, connected, monkeypatch):
-    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(quoted_removed=True))
+def summarized(monkeypatch, text: str = "מבקש חתימה על החוזה עד חמישי."):
+    monkeypatch.setattr(gmail, "summarize", lambda mail: text)
+
+
+def test_show_email_returns_a_summary_and_not_the_body(db, connected, monkeypatch):
+    """⚠️ ההכרעה המרכזית של 23.11.2026: הבוט אינו מדפיס את מלל המייל.
+
+    הטריאז' עבר למסך, ותפקיד הבוט כאן הוא לומר **מה יש** במייל.
+    """
+    secret = "שורת גוף שאינה אמורה לצאת לוואטסאפ בשום מצב"
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(body=secret))
+    summarized(monkeypatch)
     listed(db, ["gid-1"])
-    outcome = actions.execute(db, Intent(action="show_email", task_number=1))
-    assert "ההיסטוריה המצוטטת הושמטה" in outcome.reply
+    reply = actions.execute(db, Intent(action="show_email", task_number=1)).reply
+    assert "מבקש חתימה על החוזה עד חמישי." in reply
+    assert secret not in reply
+
+
+def test_the_header_is_built_in_code_and_not_by_the_model(db, connected, monkeypatch):
+    """⚠️ שולח, נושא, תאריך וקבצים אינם עוברים דרך המודל.
+
+    לכן טקסט שבתוך המייל אינו יכול לשנות אותם.
+    """
+    monkeypatch.setattr(
+        gmail, "fetch_full", lambda db_, mid: full(4, attachments=["חוזה.pdf"])
+    )
+    summarized(monkeypatch, "תקציר")
+    listed(db, ["gid-1"])
+    reply = actions.execute(db, Intent(action="show_email", task_number=1)).reply
+    assert "מאת: דני כהן" in reply
+    assert "נושא: נושא 4" in reply
+    assert "מצורף: חוזה.pdf" in reply
+
+
+def test_a_failed_summary_shows_a_bounded_opening_and_says_so(db, connected, monkeypatch):
+    """⚠️ נפילה מבוקרת: שורות פתיחה חסומות באורך, ולא המייל המלא.
+
+    להציג כלום היה גרוע יותר, ולהציג הכול היה חזרה להתנהגות שבוטלה.
+    """
+    long_body = "א" * 3000
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(body=long_body))
+
+    def boom(mail):
+        raise gmail.SummaryFailed("אין מפתח")
+
+    monkeypatch.setattr(gmail, "summarize", boom)
+    listed(db, ["gid-1"])
+    reply = actions.execute(db, Intent(action="show_email", task_number=1)).reply
+    assert "לא הצלחתי לתקצר" in reply
+    # ⚠️ הגוף חסום, ולא יוצא במלואו. נבדק באורך ולא בספירת תווים, כי
+    # המילה "נושא" בכותרת נגמרת ב-א וספירה תמימה נכשלה על התו הזה
+    assert long_body not in reply
+    assert len(reply) < gmail.FALLBACK_CHARS + 300
+
+
+def test_an_empty_mail_is_not_sent_to_the_model(db, connected, monkeypatch):
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(body="   "))
+    monkeypatch.setattr(gmail, "summarize", lambda mail: pytest.fail("אין מה לתקצר"))
+    listed(db, ["gid-1"])
+    assert "(המייל ריק)" in actions.execute(
+        db, Intent(action="show_email", task_number=1)
+    ).reply
+
+
+def test_a_summarised_mail_fits_one_whatsapp_message(db, connected, monkeypatch):
+    """תקציר של שתיים-שלוש שורות לא אמור להתפצל יותר."""
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(body="ב" * 20000))
+    summarized(monkeypatch)
+    listed(db, ["gid-1"])
+    assert actions.execute(db, Intent(action="show_email", task_number=1)).parts == []
 
 
 def test_attachment_names_are_shown_without_downloading_them(db, connected, monkeypatch):
@@ -557,12 +622,17 @@ def test_an_empty_mail_body_is_reported(db, connected, monkeypatch):
     ).reply
 
 
-def test_a_long_mail_is_split_into_several_messages(db, connected, monkeypatch):
+def test_a_long_mail_no_longer_floods_whatsapp(db, connected, monkeypatch):
+    """⚠️ היה מתפצל לכמה הודעות, ומ-23.11.2026 הוא מתקצר במקום.
+
+    הפיצול עצמו נשאר ונחוץ — אבל לרשימות, לא למייל בודד.
+    """
     monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(body="א" * 9000))
+    summarized(monkeypatch)
     listed(db, ["gid-1"])
     outcome = actions.execute(db, Intent(action="show_email", task_number=1))
-    assert len(outcome.parts) > 1
-    assert all(len(part) <= gmail.PART_CHARS + 100 for part in outcome.parts)
+    assert outcome.parts == []
+    assert len(outcome.reply) < gmail.PART_CHARS
 
 
 def test_a_short_mail_stays_one_message(db, connected, monkeypatch):
@@ -617,22 +687,39 @@ def test_the_numbering_is_written_to_the_message_log(db, connected, monkeypatch,
     assert saved.listed_task_ids == ""
 
 
-def test_a_long_mail_goes_out_as_several_whatsapp_messages(db, connected, monkeypatch, sent):
+def test_a_long_list_goes_out_as_several_whatsapp_messages(db, connected, monkeypatch, sent):
+    """⚠️ מקצה לקצה: ``Outcome.parts`` הופך לכמה קריאות ל-``send_text``.
+
+    הבדיקה הזאת בדקה פעם מייל ארוך; מ-23.11.2026 מייל בודד מתקצר, אבל
+    **הפיצול עצמו עדיין נחוץ לרשימות** — 25 מיילים חרגו מתקרת וואטסאפ
+    מול התיבה האמיתית. לכן הכיסוי עבר לכאן ולא נמחק.
+    """
     from app.routers import bot as bot_router
 
-    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(body="ב" * 9000))
-    listed(db, ["gid-1"])
+    many = [
+        gmail.EmailSummary(
+            id=f"gid-{index}",
+            thread_id=f"th-{index}",
+            sender_name=f"שולח מספר {index}",
+            sender_email=f"s{index}@example.com",
+            subject="נושא ארוך כמו של פרסומת אמיתית, עם הבטחה גדולה ועוד פסיק " * 2,
+            snippet="",
+            received_at=datetime.now(tz=IL),
+        )
+        for index in range(1, 46)
+    ]
+    monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: many)
     monkeypatch.setattr(
         bot_router,
         "extract",
-        lambda *a, **k: _result(Intent(action="show_email", task_number=1)),
+        lambda *a, **k: _result(Intent(action="list_emails", email_show_all=True)),
     )
-    row = BotMessage(wa_message_id="wa-log-2", body="תראה לי את 1")
+    row = BotMessage(wa_message_id="wa-log-2", body="תראה לי את כולם")
     db.add(row)
     db.commit()
 
     sent.clear()
-    bot_router.handle_message("wa-log-2", "תראה לי את 1")
+    bot_router.handle_message("wa-log-2", "תראה לי את כולם")
     assert len(sent) > 1
 
 

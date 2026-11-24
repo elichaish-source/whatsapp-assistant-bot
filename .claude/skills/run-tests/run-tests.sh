@@ -5,12 +5,21 @@
 set -u
 REPO=/root/whatsapp-assistant-bot
 BRANCH=${1:-main}
-SRC=/root/test-run
-DB=assistant_test
+
+# ⚠️⚠️ **נתיב ובסיס נתונים ייחודיים לכל הרצה.** עד 24.11.2026 הם היו
+# קבועים (/root/test-run ו-assistant_test), ושני סשנים שהריצו בדיקות
+# במקביל מחקו זה לזה את תיקיית העבודה באמצע הריצה. זה נראה כשגיאה
+# מבלבלת לגמרי מתוך הקונטיינר — ‏FileNotFoundError על os.getcwd() —
+# ולא כהתנגשות. השרת אחד, והסשנים מקבילים, ולכן הבידוד הוא תנאי.
+# ‏$$ הוא מזהה התהליך, ו-$2 מאפשר תג קריא כשרוצים.
+TAG=${2:-$$}
+SRC=/root/test-run-$TAG
+DB=assistant_test_$TAG
 
 PASS=$(grep ^POSTGRES_PASSWORD= $REPO/.env | cut -d= -f2)
 NET=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' whatsapp-assistant-bot-db-1)
 echo "BRANCH=$BRANCH  NETWORK=$NET"
+echo "SRC=$SRC  DB=$DB"
 
 rm -rf $SRC
 git clone -q --branch "$BRANCH" --depth 1 https://github.com/elichaish-source/whatsapp-assistant-bot.git $SRC || exit 1

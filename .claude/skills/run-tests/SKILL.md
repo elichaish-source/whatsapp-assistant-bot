@@ -22,8 +22,10 @@ description: הרצת בדיקות ה-backend על השרת, במכולה חד-�
 
 3. בסוף הוא מוחק את בסיס הנתונים הזמני ואת הקוד שהוריד. אם הוא נפל באמצע, נקה ידנית:
    ```bash
-   ssh assistant "docker exec -i whatsapp-assistant-bot-db-1 psql -U assistant -d assistant -c 'DROP DATABASE IF EXISTS assistant_test'; rm -rf /root/test-run /root/run-tests.sh"
+   ssh assistant "for d in /root/test-run-*; do rm -rf \$d; done; docker exec -i whatsapp-assistant-bot-db-1 psql -U assistant -d assistant -tAc \"select datname from pg_database where datname like 'assistant_test%'\" | xargs -r -n1 -I% docker exec -i whatsapp-assistant-bot-db-1 psql -U assistant -d assistant -c 'DROP DATABASE IF EXISTS %'"
    ```
+
+⚠️⚠️ **שני סשנים במקביל — הנתיב ובסיס הנתונים ייחודיים לכל הרצה, ואין לשנות את זה.** עד 24.11.2026 הם היו קבועים, ושני סשנים שהריצו בדיקות באותו זמן מחקו זה לזה את תיקיית העבודה באמצע. מתוך הקונטיינר זה נראה כ-`FileNotFoundError` על `os.getcwd()` — שגיאה שאינה רומזת כלל שמדובר בהתנגשות, ולכן בוזבז עליה זמן. אפשר להעביר תג קריא כפרמטר שני (`bash run-tests.sh <ענף> <תג>`), ובלעדיו הסקריפט משתמש במזהה התהליך.
 
 ## מה הבדיקות מכסות
 ‏`conftest.py` מריץ `alembic downgrade base` ואז `upgrade head` לפני הבדיקות, ולכן **כל מיגרציה חדשה נבדקת בשני הכיוונים** בכל הרצה. זו הדרך לדעת שהמיגרציה לא תשבור את השרת.
