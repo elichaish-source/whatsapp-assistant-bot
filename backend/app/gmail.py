@@ -132,6 +132,9 @@ class Triaged:
     email: EmailSummary
     relevant: bool
     line: str
+    # האם המייל מחכה לתשובה בכתב. ⚠️ שונה מ-relevant: חשבונית חשובה,
+    # אבל עונים עליה בתשלום ולא במילים. זה מה שמסמן למי להכין טיוטה
+    needs_reply: bool = False
     # סומן רלוונטי בקוד ולא במודל, כי הכתובת רשומה בכרטיס לקוח
     forced: bool = False
 
@@ -434,25 +437,27 @@ TRIAGE_CACHE_MAX = 500
 # היא תוכן שנגזר מהמייל, וההבטחה למשתמש היא ש"תוכן המיילים אינו נכתב
 # לבסיס הנתונים" (``frontend/public/privacy.html``). מטמון בזיכרון אינו
 # נוגע בהבטחה הזאת, והוא נמחק בכל הפעלה מחדש של הקונטיינר.
-_triage_cache: dict[str, tuple[datetime, bool, str]] = {}
+_triage_cache: dict[str, tuple[datetime, bool, str, bool]] = {}
 
 
-def _cache_get(message_id: str, moment: datetime) -> tuple[bool, str] | None:
+def _cache_get(message_id: str, moment: datetime) -> tuple[bool, str, bool] | None:
     hit = _triage_cache.get(message_id)
     if hit is None:
         return None
-    stored_at, relevant, line = hit
+    stored_at, relevant, line, needs_reply = hit
     if moment - stored_at > TRIAGE_TTL:
         _triage_cache.pop(message_id, None)
         return None
-    return relevant, line
+    return relevant, line, needs_reply
 
 
-def _cache_put(message_id: str, relevant: bool, line: str, moment: datetime) -> None:
+def _cache_put(
+    message_id: str, relevant: bool, line: str, needs_reply: bool, moment: datetime
+) -> None:
     if len(_triage_cache) >= TRIAGE_CACHE_MAX:
         # הישן ביותר יוצא. מילון שומר על סדר הכנסה, ולכן זה הראשון
         _triage_cache.pop(next(iter(_triage_cache)), None)
-    _triage_cache[message_id] = (moment, relevant, line)
+    _triage_cache[message_id] = (moment, relevant, line, needs_reply)
 
 
 def clear_triage_cache() -> None:
@@ -822,9 +827,10 @@ TRIAGE_SCHEMA: dict = {
                 "properties": {
                     "n": {"type": "integer"},
                     "relevant": {"type": "boolean"},
+                    "needs_reply": {"type": "boolean"},
                     "line": {"type": "string"},
                 },
-                "required": ["n", "relevant", "line"],
+                "required": ["n", "relevant", "needs_reply", "line"],
             },
         }
     },
@@ -847,6 +853,12 @@ TRIAGE_PROMPT = """אתה מסנן מיילים בשביל אדם שמנהל ע�
 ‏relevant הוא false כשאין בו דבר שדורש ממנו כלום: פרסומת, ניוזלטר, הצעה
 שיווקית, הודעת מערכת שהכול תקין בה, אישור הרשמה, עדכון תנאי שימוש, או
 מייל שנשלח לרשימת תפוצה.
+
+‏needs_reply הוא true כשהמייל מחכה ל**תשובה בכתב** ממנו: שאלה שנשאל,
+בקשה שצריך לאשר או לדחות, הצעה שמחכה לתגובה, או פנייה של אדם שממתין.
+הוא false כשהמייל דורש פעולה אחרת — לשלם, לחתום, להגיע, לקרוא — ובכל
+מייל אוטומטי. ⚠️ מייל יכול להיות relevant בלי needs_reply: חשבונית
+חשובה, אבל עונים עליה בתשלום ולא במילים.
 
 ב-line כתוב משפט אחד קצר בעברית שאומר מה יש במייל ומה מבקשים ממנו —
 "מבקש חתימה על החוזה עד חמישי", "חשבונית לתשלום 847 ש\"ח". בלי לחזור על
@@ -897,7 +909,7 @@ def _triage_tokens(count: int) -> int:
     return 1024 + 200 * max(count, 1)
 
 
-def _ask_haiku(emails: list[EmailSummary]) -> dict[int, tuple[bool, str]]:
+def _ask_haiku(emails: list[EmailSummary]) -> dict[int, tuple[bool, str, bool]]:
     """קריאה אחת ל-Haiku על הרשימה. מחזיר מילון לפי המספר ברשימה.
 
     זורק את החריגות של anthropic כדי שהקורא יחליט מה לעשות בכשל.
@@ -920,13 +932,17 @@ def _ask_haiku(emails: list[EmailSummary]) -> dict[int, tuple[bool, str]]:
         output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
     )
     text = next(block.text for block in response.content if block.type == "text")
-    verdicts: dict[int, tuple[bool, str]] = {}
+    verdicts: dict[int, tuple[bool, str, bool]] = {}
     for item in json.loads(text).get("items") or []:
         try:
             number = int(item["n"])
         except (KeyError, TypeError, ValueError):
             continue
-        verdicts[number] = (bool(item.get("relevant")), str(item.get("line") or "").strip())
+        verdicts[number] = (
+            bool(item.get("relevant")),
+            str(item.get("line") or "").strip(),
+            bool(item.get("needs_reply")),
+        )
     return verdicts
 
 
@@ -997,8 +1013,8 @@ def _ask_in_batches(fresh: list[EmailSummary]) -> dict[str, tuple[bool, str]]:
 
 def _merge(
     emails: list[EmailSummary],
-    cached: dict[str, tuple[bool, str]],
-    fresh: dict[str, tuple[bool, str]],
+    cached: dict[str, tuple[bool, str, bool]],
+    fresh: dict[str, tuple[bool, str, bool]],
     forced: set[str],
     store: bool,
 ) -> list[Triaged]:
@@ -1007,21 +1023,23 @@ def _merge(
     result = []
     for item in emails:
         if item.id in cached:
-            relevant, line = cached[item.id]
+            relevant, line, needs_reply = cached[item.id]
         elif item.id in fresh:
-            relevant, line = fresh[item.id]
+            relevant, line, needs_reply = fresh[item.id]
             if store:
-                _cache_put(item.id, relevant, line, moment)
+                _cache_put(item.id, relevant, line, needs_reply, moment)
         else:
             # מייל שהמודל שכח, או שהסינון לא רץ בכלל: עדיף להציג מיותר
-            # מלהחסיר. ⚠️ לא נשמר במטמון, כדי שהניסיון הבא יסווג אותו
-            relevant, line = True, item.snippet[:150]
+            # מלהחסיר. ⚠️ לא נשמר במטמון, כדי שהניסיון הבא יסווג אותו.
+            # needs_reply נשאר false — הכנת טיוטה אינה ברירת מחדל
+            relevant, line, needs_reply = True, item.snippet[:150], False
         is_client = item.sender_email.lower() in forced
         result.append(
             Triaged(
                 email=item,
                 relevant=relevant or is_client,
                 line=line or item.snippet[:150],
+                needs_reply=needs_reply,
                 forced=is_client,
             )
         )
@@ -1367,3 +1385,59 @@ def send_reply(db: Session, message_id: str, body: str) -> ReplyTarget:
     # ⚠️ בלי תוכן התשובה בלוג: הוא לא נשמר בשום מקום, וגם לא נרשם
     log.info("נשלחה תשובה על מייל %s", message_id)
     return target
+
+
+# --- טיוטות מוכנות מראש (הוכרע 24.11.2026) ---
+#
+# ⚠️⚠️ **אין כאן תפוגה, וזה העיקר.** מטמון הסיווג פג כל חצי שעה, כי
+# הוא זול ומשתנה. טיוטה היא היפוכו: יקרה (מענה הוא Opus עם גוף המייל)
+# ולא משתנה — המייל כבר נכתב. תפוגה הייתה מייצרת אותה מחדש כל חצי שעה
+# לכל מייל בתיבה, מאות פעמים ביום.
+#
+# **מה שמגביל את העלות הוא "טיוטה אחת לכל מייל, אי פעם":** הסבב מכין
+# רק למיילים שהגיעו אחרי ``last_prepared_at`` שבמסד. הפעלה מחדש מוחקת
+# את המטמון אך לא את החותמת, ולכן אינה גוררת הכנה מחדש — מייל ישן פשוט
+# חוזר ללחיצה ידנית, כפי שהמשתמש ביקש.
+PREPARED_MAX = 300
+
+
+@dataclass
+class Prepared:
+    """מה שהוכן מראש למייל אחד. ⚠️ בזיכרון התהליך בלבד."""
+
+    prepared_at: datetime
+    task: TaskDraft | None = None
+    replies: list[ReplyOption] = field(default_factory=list)
+
+
+_prepared: dict[str, Prepared] = {}
+
+
+def prepared_for(message_id: str) -> Prepared | None:
+    """מה שמוכן למייל, אם מוכן. ‏None פירושו "להכין עכשיו"."""
+    return _prepared.get(message_id)
+
+
+def remember_prepared(
+    message_id: str,
+    moment: datetime,
+    task: TaskDraft | None = None,
+    replies: list[ReplyOption] | None = None,
+) -> None:
+    """שומר מה שהוכן. מיזוג, כדי שהמענה לא ימחק את טיוטת המשימה."""
+    current = _prepared.get(message_id) or Prepared(prepared_at=moment)
+    if task is not None:
+        current.task = task
+    if replies is not None:
+        current.replies = replies
+    current.prepared_at = moment
+    _prepared[message_id] = current
+
+    if len(_prepared) > PREPARED_MAX:
+        # הישן ביותר יוצא. מילון שומר על סדר הכנסה
+        _prepared.pop(next(iter(_prepared)), None)
+
+
+def clear_prepared() -> None:
+    """לבדיקות, ולמי שרוצה להכין הכול מחדש."""
+    _prepared.clear()

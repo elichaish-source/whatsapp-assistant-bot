@@ -848,3 +848,204 @@ def test_replying_requires_a_login(anon, connected, no_send):
     assert anon.post("/api/emails/gid-1/reply", json={"body": "טקסט"}).status_code == 401
     assert anon.get("/api/emails/gid-1/reply-draft").status_code == 401
     assert no_send == []
+
+
+# --- הכנת טיוטות מראש ---
+#
+# ⚠️⚠️ הבדיקות כאן שומרות על מה שמגביל את העלות. בלי "טיוטה אחת לכל
+# מייל, אי פעם", המנגנון הזה מייצר מחדש טיוטת Opus לכל מייל בתיבה בכל
+# סבב — מאות פעמים ביום.
+
+
+@pytest.fixture(autouse=True)
+def clean_prepared():
+    gmail.clear_prepared()
+    yield
+    gmail.clear_prepared()
+
+
+@pytest.fixture
+def no_models(monkeypatch):
+    """סופר קריאות למודל, בלי לקרוא לו."""
+    calls = {"task": 0, "reply": 0}
+
+    def task(mail):
+        calls["task"] += 1
+        return gmail.TaskDraft(title="לעשות", due_date="", summary="")
+
+    def reply(mail, block=""):
+        calls["reply"] += 1
+        return [gmail.ReplyOption(label="מאשר", text="בסדר")]
+
+    monkeypatch.setattr(gmail, "task_draft", task)
+    monkeypatch.setattr(gmail, "reply_suggestions", reply)
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    return calls
+
+
+def triaged_as(monkeypatch, rows, needs_reply_ids=()):
+    monkeypatch.setattr(gmail, "list_screen", lambda *a, **k: rows)
+    monkeypatch.setattr(
+        gmail,
+        "triage",
+        lambda emails, client_emails=None: [
+            gmail.Triaged(
+                email=item,
+                relevant=True,
+                line="שורה",
+                needs_reply=item.id in needs_reply_ids,
+            )
+            for item in emails
+        ],
+    )
+
+
+def test_a_task_draft_is_prepared_for_a_new_mail(db, connected, monkeypatch, no_models):
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    assert reminders.prepare_drafts(db)[0] == 1
+    assert no_models["task"] == 1
+
+
+def test_the_same_mail_is_never_prepared_twice(db, connected, monkeypatch, no_models):
+    """⚠️⚠️ זה מה שמגביל את העלות. בלי זה כל סבב מכין הכול מחדש."""
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    reminders.prepare_drafts(db)
+    reminders.prepare_drafts(db)
+    reminders.prepare_drafts(db)
+    assert no_models["task"] == 1
+
+
+def test_a_restart_does_not_cause_a_second_preparation(db, connected, monkeypatch, no_models):
+    """⚠️⚠️ המטמון בזיכרון נמחק בכל פריסה, והחותמת במסד שורדת.
+
+    בלי החותמת, כל הפעלה מחדש הייתה מכינה מחדש טיוטה לכל מייל בתיבה —
+    ועל מענה זה מודל יקר.
+    """
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    reminders.prepare_drafts(db)
+    # הפעלה מחדש: הזיכרון נמחק, המסד נשאר
+    gmail.clear_prepared()
+    reminders.prepare_drafts(db)
+    assert no_models["task"] == 1
+
+
+def test_a_mail_that_arrived_after_the_stamp_is_prepared(db, connected, monkeypatch, no_models):
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    reminders.prepare_drafts(db)
+    # מייל חדש יותר מהחותמת
+    later = mail(2)
+    later.received_at = now().astimezone(IL) + timedelta(minutes=5)
+    triaged_as(monkeypatch, [later])
+    assert reminders.prepare_drafts(db)[0] == 1
+    assert no_models["task"] == 2
+
+
+def test_replies_are_prepared_only_at_the_chosen_hours(db, connected, monkeypatch, no_models):
+    """⚠️ המענה יקר פי חמישים מהמשימה, ולכן אינו רץ בכל סבב."""
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)], needs_reply_ids={"gid-1"})
+    monkeypatch.setattr(reminders, "_prepare_hours", lambda: {7})
+
+    at_nine = now().astimezone(IL).replace(hour=9, minute=0)
+    assert reminders.prepare_drafts(db, at_nine)[1] == 0
+    assert no_models["reply"] == 0
+
+    gmail.clear_prepared()
+    at_seven = now().astimezone(IL).replace(hour=7, minute=0)
+    assert reminders.prepare_drafts(db, at_seven)[1] == 1
+    assert no_models["reply"] == 1
+
+
+def test_a_mail_that_needs_no_reply_gets_no_reply_draft(db, connected, monkeypatch, no_models):
+    """⚠️ חשבונית חשובה, אבל עונים עליה בתשלום ולא במילים."""
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)], needs_reply_ids=set())
+    monkeypatch.setattr(reminders, "_prepare_hours", lambda: {7})
+    at_seven = now().astimezone(IL).replace(hour=7, minute=0)
+    reminders.prepare_drafts(db, at_seven)
+    assert no_models["reply"] == 0
+    # אבל טיוטת המשימה כן הוכנה
+    assert no_models["task"] == 1
+
+
+def test_without_a_google_connection_nothing_is_prepared(db, monkeypatch, no_models):
+    from app.bot import reminders
+
+    monkeypatch.setattr(
+        gmail, "list_screen", lambda *a, **k: pytest.fail("אין לפנות לגוגל בלי חיבור")
+    )
+    assert reminders.prepare_drafts(db) == (0, 0)
+
+
+def test_a_failed_preparation_never_touches_the_reminders(db, connected, monkeypatch):
+    """⚠️ ההכנה היא נוחות ולא תלות."""
+    from app.bot import reminders
+
+    monkeypatch.setattr(
+        gmail, "list_screen", lambda *a, **k: (_ for _ in ()).throw(gmail.GmailError("רשת"))
+    )
+    reminders._tick()
+
+
+def test_the_prepared_draft_is_served_without_calling_the_model(
+    client, connected, monkeypatch, no_models
+):
+    """הלחיצה מגישה את מה שהוכן, ולא מכינה מחדש."""
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    reminders.prepare_drafts(db=SessionLocal())
+    before = no_models["task"]
+    assert client.get("/api/emails/gid-1/task-draft").status_code == 200
+    assert no_models["task"] == before
+
+
+def test_a_mail_without_a_prepared_draft_still_works(client, connected, monkeypatch, no_models):
+    """⚠️ נוחות ולא תנאי: בלי הכנה, הלחיצה מכינה בזמן אמת."""
+    assert client.get("/api/emails/gid-9/task-draft").status_code == 200
+    assert no_models["task"] == 1
+
+
+def test_the_reply_draft_reports_when_it_was_prepared(client, connected, monkeypatch, no_models):
+    """המשתמש צריך לדעת שהוא קורא טקסט שנכתב לפני כמה שעות."""
+    monkeypatch.setattr(
+        gmail,
+        "reply_target",
+        lambda db_, mid: gmail.ReplyTarget(to="a@b.com", subject="Re: x", thread_id="t"),
+    )
+    gmail.remember_prepared(
+        "gid-1", now(), replies=[gmail.ReplyOption(label="מאשר", text="בסדר")]
+    )
+    body = client.get("/api/emails/gid-1/reply-draft").json()
+    assert body["prepared_at"] is not None
+    assert no_models["reply"] == 0
+
+
+def test_a_fresh_reply_draft_has_no_prepared_at(client, connected, monkeypatch, no_models):
+    monkeypatch.setattr(
+        gmail,
+        "reply_target",
+        lambda db_, mid: gmail.ReplyTarget(to="a@b.com", subject="Re: x", thread_id="t"),
+    )
+    body = client.get("/api/emails/gid-1/reply-draft").json()
+    assert body["prepared_at"] is None
+    assert no_models["reply"] == 1
+
+
+def test_the_configured_hours_are_read_from_settings(monkeypatch):
+    from app.bot import reminders
+
+    monkeypatch.setattr(gmail.get_settings(), "reply_prepare_hours", "7,12,17")
+    assert reminders._prepare_hours() == {7, 12, 17}
+    monkeypatch.setattr(gmail.get_settings(), "reply_prepare_hours", "6, 18 ,99,לא")
+    assert reminders._prepare_hours() == {6, 18}

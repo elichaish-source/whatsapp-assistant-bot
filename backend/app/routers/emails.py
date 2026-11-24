@@ -102,6 +102,7 @@ def list_emails(
             unread=item.email.unread,
             has_attachments=item.email.has_attachments,
             thread_count=item.email.thread_count,
+            needs_reply=item.needs_reply,
             thread_ids=item.email.thread_ids or [item.email.id],
         )
         for item in triaged
@@ -179,11 +180,17 @@ def reply_draft(message_id: str, db: Session = Depends(get_db)) -> ReplyDraftOut
         log.warning("הכנת תשובה נכשלה: %s", exc)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
 
-    options = gmail.reply_suggestions(mail, memory.build_block(db))
+    # ⚠️ מוכן מראש אם הסבב הגיע אליו. אחרת מכינים עכשיו, כמו קודם
+    ready = gmail.prepared_for(message_id)
+    if ready and ready.replies:
+        options, prepared_at = ready.replies, ready.prepared_at
+    else:
+        options, prepared_at = gmail.reply_suggestions(mail, memory.build_block(db)), None
     return ReplyDraftOut(
         to=target.to,
         subject=target.subject,
         options=[ReplyOptionOut(label=item.label, text=item.text) for item in options],
+        prepared_at=prepared_at,
     )
 
 
@@ -238,7 +245,9 @@ def task_draft(message_id: str, db: Session = Depends(get_db)) -> TaskDraftOut:
         log.warning("שליפת מייל לטיוטת משימה נכשלה: %s", exc)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
 
-    draft = gmail.task_draft(mail)
+    # ⚠️ מוכן מראש אם הלולאה הספיקה. אחרת מכינים עכשיו, כמו קודם
+    ready = gmail.prepared_for(message_id)
+    draft = ready.task if ready and ready.task else gmail.task_draft(mail)
     sender = mail.sender_email.strip().lower()
     client_id = None
     if sender:
