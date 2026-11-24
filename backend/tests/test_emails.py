@@ -926,14 +926,22 @@ def test_a_restart_does_not_cause_a_second_preparation(db, connected, monkeypatc
 
     בלי החותמת, כל הפעלה מחדש הייתה מכינה מחדש טיוטה לכל מייל בתיבה —
     ועל מענה זה מודל יקר.
+
+    ⚠️⚠️ **``moment`` מועבר במפורש, ולא נלקח מהשעון.** ‏``mail()`` בונה
+    מייל של היום בשעה 09:0X, והחותמת היא ``now()`` — ולכן בלי זה הבדיקה
+    עברה ביום ונפלה **בכל לילה בין חצות לתשע בבוקר**, כשהמייל "של היום"
+    עוד בעתיד והחותמת אינה מסננת אותו. זה קרה ב-25.11.2026 ב-00:1x.
+    זה אותו לקח שנרשם על תאריך קבוע, בצורה מתוחכמת יותר: **גם שעה קבועה
+    היא תאריך קבוע**, ומה שהבדיקה באמת בודקת הוא החותמת ולא השעון.
     """
     from app.bot import reminders
 
     triaged_as(monkeypatch, [mail(1)])
-    reminders.prepare_drafts(db)
+    after = now().astimezone(IL).replace(hour=10, minute=0, second=0, microsecond=0)
+    reminders.prepare_drafts(db, moment=after)
     # הפעלה מחדש: הזיכרון נמחק, המסד נשאר
     gmail.clear_prepared()
-    reminders.prepare_drafts(db)
+    reminders.prepare_drafts(db, moment=after)
     assert no_models["task"] == 1
 
 

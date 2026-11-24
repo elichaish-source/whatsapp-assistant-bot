@@ -46,6 +46,7 @@ Action = Literal[
     "search_emails",
     "show_email",
     "email_not_yet",
+    "list_events",
     "remember",
     "clarify",
     "unknown",
@@ -96,6 +97,8 @@ class Intent(BaseModel):
     email_query: str = ""
     # list_emails: הטווח. "" הוא היום, כברירת מחדל
     email_scope: Literal["", "today", "week"] = ""
+    # list_events: הטווח ביומן. "" הוא היום, כברירת מחדל
+    event_scope: Literal["", "today", "tomorrow", "week"] = ""
     # list_emails: להציג גם את מה שהסינון דחה. בוליאני ולא איחוד, ולכן
     # גם הוא אינו נוגע במונה — בדיוק כמו requires_client
     email_show_all: bool = False
@@ -170,6 +173,7 @@ INTENT_SCHEMA: dict = {
                 "search_emails",
                 "show_email",
                 "email_not_yet",
+                "list_events",
                 "remember",
                 "clarify",
                 "unknown",
@@ -207,6 +211,10 @@ INTENT_SCHEMA: dict = {
         "email_query": {"type": "string"},
         "email_scope": {"type": "string", "enum": ["", "today", "week"]},
         "email_show_all": {"type": "boolean"},
+        # ⚠️ גם הוא מחרוזת-enum ולא איחוד, מאותה סיבה: המונה נשאר 15
+        # מתוך 16. "tomorrow" קיים כאן ולא ב-email_scope, כי "מה יש לי
+        # מחר" ביומן היא השאלה הנפוצה — ובמייל אין בכלל מייל של מחר
+        "event_scope": {"type": "string", "enum": ["", "today", "tomorrow", "week"]},
     },
     "required": [
         "action",
@@ -240,6 +248,7 @@ INTENT_SCHEMA: dict = {
         "email_query",
         "email_scope",
         "email_show_all",
+        "event_scope",
     ],
 }
 
@@ -332,6 +341,13 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   "תשלח לו תשובה", "נסח תשובה"), העברה, מחיקה, או ליצור משימה ממייל
   ("תעשה משימה מ-2"). היכולות האלה עוד לא נבנו, והשרת יענה על זה בעצמו.
   ⚠️ זה **לא** list_emails ולא show_email: אלה רק קריאה.
+- list_events: המשתמש שואל מה יש לו ביומן. "מה יש לי מחר", "מה יש לי היום",
+  "מה ביומן", "אילו פגישות יש לי", "מה הלוח שלי מחר". ב-event_scope כתוב
+  "tomorrow" כשהוא שאל על מחר, "week" כשהוא שאל על השבוע או על הימים
+  הקרובים, ואחרת "" (היום).
+  ⚠️ קביעה, שינוי או ביטול של פגישה עוד לא נבנו. "תקבע לי פגישה עם דני
+  ביום שלישי" אינו list_events — הוא clarify, ושם תאמר שקריאת היומן עובדת
+  אבל קביעת פגישה עוד לא, ושאפשר לשאול "מה יש לי מחר".
 - remember: המשתמש מבקש לזכור משהו לטווח ארוך, ולא לבצע משימה. "תזכור ש...",
   "שים לב שתמיד...", "מעכשיו...". ב-fact כתוב מה שהמשתמש אמר ולא יותר: משפט
   אחד בגוף ראשון, שיהיה מובן גם בעוד חצי שנה. ⚠️ אל תוסיף מסקנה, כלל או הוראה
@@ -413,13 +429,18 @@ SYSTEM_PROMPT = """אתה מפענח הודעות שאדם שולח לעצמו �
   במסד, ולכן query_data לא יכול לענות עליהם לעולם.
 - show_email או complete_task? אחרי רשימת מיילים, "תראה לי את 2" ו"מה כתוב
   ב-2" הם show_email. "סיימתי 2" הוא עדיין משימה.
+- ⚠️⚠️ יומן או משימות? list_events **רק כשהמשתמש אמר מילה שמעידה על היומן**
+  — "יומן", "פגישה", "פגישות", "לוח", "לוח זמנים", "מתי אני פנוי", "מה
+  קבוע לי". "מה יש לי מחר" ו"מה יש לי להיום" **בלי** אחת מהמילים האלה הם
+  רשימת משימות (list_tasks), כפי שהיו עד עכשיו. אם באמת לא ברור — clarify,
+  ושאל אם הכוונה למשימות או ליומן. אל תנחש.
 - הודעה אחת היא פעולה אחת. אם המשתמש ביקש שתיים ("לקוח חדש משה כהן ותזכיר
   לי להתקשר אליו"), בצע את הראשונה בלבד.
 - כל שדה שאינו רלוונטי לפעולה שבחרת — null. יש שדות שבהם אין null לעולם:
   repeat_unit הוא "none" בכל פעולה שאינה add_recurring, ‏repeat_count,
   ‏lead_days ו-family_id הם 0, ‏requires_client ו-email_show_all הם false,
-  ו-sql, ‏name, ‏phone, ‏email, ‏tax_id, ‏address, ‏active, ‏email_query
-  ו-email_scope הם מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
+  ו-sql, ‏name, ‏phone, ‏email, ‏tax_id, ‏address, ‏active, ‏email_query,
+  ‏email_scope ו-event_scope הם מחרוזת ריקה בכל פעולה שאינה משתמשת בהם."""
 
 
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n\n{queries.SCHEMA_DOC}"
