@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -363,5 +364,30 @@ class GoogleCredential(TimestampMixin, Base):
     # בדואר הנכנס — ועל מענה זה מודל יקר. ⚠️ זמנים בלבד, לא תוכן
     last_prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_reply_prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # ⚠️ באיזה יום כבר יצא הסיכום. בלעדיו הוא היה יוצא בכל סבב של
+    # הלולאה באותה שעה, כלומר פעמיים בדקה במשך שעה
+    last_digest_on: Mapped[date | None] = mapped_column(Date)
     # מתי יצאה ההודעה על הניתוק. קיים כדי שלא תצא שוב בכל סבב של הלולאה
     disconnected_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EmailAlert(Base):
+    """על מה הבוט כבר התריע (שלב 4-6).
+
+    ⚠️⚠️ **בלי זה הבוט היה מתריע על אותו שרשור כל יום, לנצח.** התראה
+    שחוזרת היא רעש, והמשתמש מפסיק לקרוא אותה.
+
+    ⚠️ **מזהים בלבד ולא תוכן** — כמו ``listed_email_ids``.
+    """
+
+    __tablename__ = "email_alerts"
+    __table_args__ = (
+        CheckConstraint("kind IN ('waiting', 'silent')", name="email_alert_kind"),
+        UniqueConstraint("thread_id", "kind", name="email_alert_once"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    # ‏waiting = מישהו מחכה לתשובה ממך; silent = מישהו לא ענה לך
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    alerted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

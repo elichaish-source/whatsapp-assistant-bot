@@ -1097,3 +1097,144 @@ def test_the_warmup_hands_its_rows_to_the_preparation(db, connected, monkeypatch
         gmail, "list_screen", lambda *a, **k: pytest.fail("אין לשלוף שוב")
     )
     assert reminders.prepare_drafts(db, rows)[0] == 1
+
+
+# --- סיכום והתראות (שלב 4-6) ---
+#
+# ⚠️ ההודעות האלה יוזמות, ולכן מגיעות בלי צליל עד שהבוט יעבור למספר
+# משלו. המשתמש בחר במודע לבנות בכל זאת (24.11.2026).
+
+
+def counts(week=29, today=4, important=2):
+    return gmail.InboxCounts(week=week, today=today, important_today=important)
+
+
+def waiting(thread="th-1", who="dani@example.com", days=4):
+    return gmail.Waiting(thread_id=thread, who=who, days=days)
+
+
+@pytest.fixture
+def digest_ready(monkeypatch, connected):
+    """הכול מוכן לסיכום, בלי לפנות לגוגל."""
+    from app.bot import reminders
+
+    monkeypatch.setattr(gmail, "inbox_counts", lambda db_: counts())
+    monkeypatch.setattr(gmail, "waiting_for_you", lambda db_, me, days=3: [])
+    monkeypatch.setattr(gmail, "awaiting_reply", lambda db_, me, days=3: [])
+    monkeypatch.setattr(reminders, "_digest_hour", lambda: 7)
+
+
+def at_seven():
+    return now().astimezone(IL).replace(hour=7, minute=0, second=0, microsecond=0)
+
+
+def test_the_digest_is_numbers_only(db, digest_ready, sent):
+    """⚠️⚠️ ההכרעה של 4-6: סיכום = מספרים, בלי נושא ובלי שולח.
+
+    מי שרוצה פירוט פותח את המסך.
+    """
+    from app.bot import reminders
+
+    assert reminders.send_mail_digest(db, at_seven()) == 1
+    body = sent[-1][1]
+    assert "29" in body and "4" in body
+    # שום שם, שום נושא
+    assert "@" not in body
+
+
+def test_the_digest_goes_out_once_a_day(db, digest_ready, sent):
+    """⚠️ הלולאה רצה כל 30 שניות. בלי חותמת, הסיכום היה יוצא 120 פעמים."""
+    from app.bot import reminders
+
+    assert reminders.send_mail_digest(db, at_seven()) == 1
+    assert reminders.send_mail_digest(db, at_seven()) == 0
+    assert reminders.send_mail_digest(db, at_seven().replace(minute=59)) == 0
+    assert len(sent) == 1
+
+
+def test_the_digest_does_not_go_out_at_other_hours(db, digest_ready, sent):
+    from app.bot import reminders
+
+    assert reminders.send_mail_digest(db, at_seven().replace(hour=11)) == 0
+    assert sent == []
+
+
+def test_an_alert_names_who_and_how_long(db, connected, monkeypatch, sent):
+    from app.bot import reminders
+
+    monkeypatch.setattr(gmail, "inbox_counts", lambda db_: counts())
+    monkeypatch.setattr(gmail, "waiting_for_you", lambda db_, me, days=3: [waiting()])
+    monkeypatch.setattr(gmail, "awaiting_reply", lambda db_, me, days=3: [])
+    monkeypatch.setattr(reminders, "_digest_hour", lambda: 7)
+
+    reminders.send_mail_digest(db, at_seven())
+    alert = sent[-1][1]
+    assert "dani@example.com" in alert
+    assert "4" in alert
+    assert "מחכה לתשובה ממך" in alert
+
+
+def test_the_same_thread_is_alerted_once_and_never_again(db, connected, monkeypatch, sent):
+    """⚠️⚠️ בלי זה הבוט מתריע על אותו שרשור כל יום לנצח, והמשתמש
+    מפסיק לקרוא את ההתראות — וזה הכשל שהורג את כל היכולת."""
+    from app.bot import reminders
+
+    monkeypatch.setattr(gmail, "inbox_counts", lambda db_: counts())
+    monkeypatch.setattr(gmail, "waiting_for_you", lambda db_, me, days=3: [waiting()])
+    monkeypatch.setattr(gmail, "awaiting_reply", lambda db_, me, days=3: [])
+    monkeypatch.setattr(reminders, "_digest_hour", lambda: 7)
+
+    assert reminders.send_mail_digest(db, at_seven()) == 2
+    # למחרת: הסיכום יוצא שוב, ההתראה לא
+    tomorrow = at_seven() + timedelta(days=1)
+    assert reminders.send_mail_digest(db, tomorrow) == 1
+
+
+def test_the_two_directions_are_tracked_separately(db, connected, monkeypatch, sent):
+    """אותו שרשור יכול להיות גם "מחכה לך" וגם "לא ענו לך" בזמנים שונים."""
+    from app.bot import reminders
+
+    monkeypatch.setattr(gmail, "inbox_counts", lambda db_: counts())
+    monkeypatch.setattr(gmail, "waiting_for_you", lambda db_, me, days=3: [waiting("th-9")])
+    monkeypatch.setattr(gmail, "awaiting_reply", lambda db_, me, days=3: [waiting("th-9")])
+    monkeypatch.setattr(reminders, "_digest_hour", lambda: 7)
+    # סיכום + שתי התראות על אותו שרשור, בשני כיוונים
+    assert reminders.send_mail_digest(db, at_seven()) == 3
+
+
+def test_without_a_google_connection_no_digest(db, monkeypatch, sent):
+    from app.bot import reminders
+
+    monkeypatch.setattr(
+        gmail, "inbox_counts", lambda db_: pytest.fail("אין לפנות לגוגל בלי חיבור")
+    )
+    assert reminders.send_mail_digest(db, at_seven()) == 0
+
+
+def test_a_failed_digest_never_touches_the_reminders(db, connected, monkeypatch):
+    """⚠️ הסיכום הוא נוחות ולא תלות."""
+    from app.bot import reminders
+
+    monkeypatch.setattr(reminders, "_digest_hour", lambda: now().astimezone(IL).hour)
+    monkeypatch.setattr(
+        gmail, "inbox_counts", lambda db_: (_ for _ in ()).throw(gmail.GmailError("רשת"))
+    )
+    reminders._tick()
+
+
+def test_the_alert_window_is_three_days_both_ways():
+    """⚠️ שלושה ימים לשני הכיוונים — הוכרע 23.11.2026, ושינה את
+    מה שנקבע ב-17.11 (יומיים לכיוון אחד, ארבעה לשני)."""
+    assert gmail.ALERT_DAYS == 3
+
+
+def test_the_digest_text_says_where_the_detail_is():
+    """הבוט מצטמצם: הוא נותן מספר ומפנה למסך."""
+    body = reminders_digest_text()
+    assert "מסך" in body
+
+
+def reminders_digest_text():
+    from app.bot import reminders
+
+    return reminders.digest_text(counts(), [], [])

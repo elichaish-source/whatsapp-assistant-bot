@@ -18,7 +18,7 @@ from .. import gauth, gmail, memory, notify, recurring, timeframe, waha
 from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
-from ..models import Task
+from ..models import EmailAlert, Task
 from .actions import describe, now_local, to_local
 
 log = logging.getLogger(__name__)
@@ -160,6 +160,11 @@ def _tick() -> None:
                 prepare_drafts(db, triaged)
         except Exception:  # noqa: BLE001 - חימום והכנה הם נוחות, לא תלות
             log.exception("חימום המסך או הכנת הטיוטות נכשלו")
+            db.rollback()
+        try:
+            send_mail_digest(db)
+        except Exception:  # noqa: BLE001 - הסיכום הוא נוחות, לא תלות
+            log.exception("סיכום המיילים נכשל")
             db.rollback()
     finally:
         db.close()
@@ -320,3 +325,111 @@ def prepare_drafts(
     if tasks_made or replies_made:
         log.info("הוכנו מראש: %d משימות, %d מענים", tasks_made, replies_made)
     return tasks_made, replies_made
+
+
+# --- סיכום והתראות מיילים (שלב 4-6) ---
+#
+# ⚠️⚠️ **הבוט מצטמצם.** הוכרע 23.11.2026: הטריאז' עבר למסך, ומה שנשאר
+# לבוט הוא התראות, סיכומי מספרים, ותשובות לשאלות שנשאלו. לכן הסיכום
+# כאן הוא **מספרים בלבד, בלי נושא ובלי שולח** — מי שרוצה פירוט פותח
+# את המסך.
+#
+# ⚠️ **ההודעות האלה יוזמות, ולכן מגיעות בלי צליל** עד שהבוט יעבור
+# למספר וואטסאפ משלו: וואטסאפ אינה מתריעה על הודעה שאדם שולח לעצמו.
+# המשתמש בחר במודע לבנות בכל זאת (24.11.2026).
+
+
+def _digest_hour() -> int:
+    """השעה שבה יוצא הסיכום היומי."""
+    raw = str(get_settings().digest_hour).strip()
+    return int(raw) if raw.isdigit() and 0 <= int(raw) <= 23 else 7
+
+
+def digest_text(counts, waiting: list, silent: list) -> str:
+    """הסיכום כטקסט. ⚠️ **מספרים בלבד** — בלי נושא ובלי שולח."""
+    lines = [
+        "סיכום מיילים",
+        f"השבוע נכנסו {counts.week}",
+        f"היום {counts.today}, מהם {counts.important_today} שלא נקראו",
+    ]
+    if waiting:
+        lines.append(f"{len(waiting)} מחכים לתשובה ממך")
+    if silent:
+        lines.append(f"{len(silent)} לא ענו לך")
+    lines.append("הפירוט במסך המיילים.")
+    return "\n".join(lines)
+
+
+def alert_text(item, kind: str) -> str:
+    """התראה על שרשור אחד. ⚠️ שם וימים — בלי נושא ובלי תוכן."""
+    who = item.who or "מישהו"
+    if kind == "waiting":
+        return f"{who} מחכה לתשובה ממך כבר {item.days} ימים."
+    return f"{who} לא ענה לך כבר {item.days} ימים."
+
+
+def _already_alerted(db: Session, thread_id: str, kind: str) -> bool:
+    return db.scalars(
+        select(EmailAlert.id).where(
+            EmailAlert.thread_id == thread_id, EmailAlert.kind == kind
+        )
+    ).first() is not None
+
+
+def send_mail_digest(db: Session, moment: datetime | None = None) -> int:
+    """הסיכום היומי וההתראות. מחזיר כמה הודעות יצאו.
+
+    ⚠️⚠️ **כל התראה יוצאת פעם אחת לכל שרשור**, לפי ``email_alerts``.
+    בלי זה הבוט היה מתריע על אותו שרשור כל יום לנצח — והתראה שחוזרת
+    היא רעש שמפסיקים לקרוא.
+
+    ⚠️ **זו נוחות ולא תלות:** כל כשל נבלע ואינו נוגע בתזכורות.
+    """
+    moment = moment or now()
+    cred = gauth.get_credential(db)
+    if cred is None or cred.status != "connected" or not cred.email:
+        return 0
+    if moment.astimezone(gmail.local_tz()).hour != _digest_hour():
+        return 0
+    # ⚠️ פעם ביום: החותמת מתקדמת מיד, כך שהסבב הבא באותה שעה מדלג
+    if cred.last_digest_on == moment.astimezone(gmail.local_tz()).date():
+        return 0
+    cred.last_digest_on = moment.astimezone(gmail.local_tz()).date()
+    db.commit()
+
+    phone = get_settings().owner_phone
+    if not phone:
+        return 0
+
+    me = cred.email
+    waiting = gmail.waiting_for_you(db, me)
+    silent = gmail.awaiting_reply(db, me)
+
+    sent = 0
+    text = gmail.inbox_counts(db)
+    try:
+        body = digest_text(text, waiting, silent)
+        waha.send_text(phone, body)
+        ring(body)
+        sent += 1
+    except waha.WahaError:
+        log.exception("שליחת סיכום המיילים נכשלה")
+
+    # ⚠️ ההתראות אחרי הסיכום, וכל אחת פעם אחת בלבד
+    for kind, items in (("waiting", waiting), ("silent", silent)):
+        for item in items:
+            if _already_alerted(db, item.thread_id, kind):
+                continue
+            try:
+                body = alert_text(item, kind)
+                waha.send_text(phone, body)
+                ring(body)
+                sent += 1
+            except waha.WahaError:
+                log.exception("שליחת התראה על %s נכשלה", item.thread_id)
+                continue
+            db.add(EmailAlert(thread_id=item.thread_id, kind=kind, alerted_at=moment))
+            db.commit()
+
+    log.info("סיכום המיילים נשלח: %d הודעות", sent)
+    return sent
