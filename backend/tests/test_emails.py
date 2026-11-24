@@ -1049,3 +1049,49 @@ def test_the_configured_hours_are_read_from_settings(monkeypatch):
     assert reminders._prepare_hours() == {7, 12, 17}
     monkeypatch.setattr(gmail.get_settings(), "reply_prepare_hours", "6, 18 ,99,לא")
     assert reminders._prepare_hours() == {6, 18}
+
+
+def test_the_preparation_does_not_fetch_the_mailbox_on_every_tick(db, connected, monkeypatch, no_models):
+    """⚠️⚠️ באג שנתפס לפני שהגיע לשימוש: ההכנה רצה בכל טיק (כל 30
+    שניות) ושלפה את התיבה מגוגל בעצמה — שליפה מלאה פעמיים בדקה.
+
+    עכשיו החימום מחזיר את השורות המסווגות וההכנה רוכבת עליהן, ולכן
+    הלולאה פונה לגוגל רק כשהחימום באמת רץ (פעם ב-20 דקות).
+    """
+    from app.bot import reminders
+
+    fetches = []
+
+    def counted(db_, scope, *a, **k):
+        fetches.append(scope)
+        return [mail(1)]
+
+    monkeypatch.setattr(gmail, "list_screen", counted)
+    monkeypatch.setattr(
+        gmail,
+        "triage",
+        lambda emails, client_emails=None: [
+            gmail.Triaged(email=item, relevant=True, line="שורה") for item in emails
+        ],
+    )
+    reminders.reset_warm_clock()
+    reminders._tick()
+    reminders._tick()
+    reminders._tick()
+    # שלושה טיקים, שליפה אחת
+    assert len(fetches) == 1
+
+
+def test_the_warmup_hands_its_rows_to_the_preparation(db, connected, monkeypatch, no_models):
+    """⚠️ שליפה אחת לשניהם, ולא אחת לכל אחד."""
+    from app.bot import reminders
+
+    triaged_as(monkeypatch, [mail(1)])
+    reminders.reset_warm_clock()
+    rows = reminders.warm_mail_screen(db)
+    assert rows and len(rows) == 1
+    # ההכנה מקבלת אותן ואינה שולפת שוב
+    monkeypatch.setattr(
+        gmail, "list_screen", lambda *a, **k: pytest.fail("אין לשלוף שוב")
+    )
+    assert reminders.prepare_drafts(db, rows)[0] == 1
