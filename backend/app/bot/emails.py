@@ -262,6 +262,13 @@ def _resolve(db: Session, number: int) -> str | None:
 
 
 def _render(mail: gmail.EmailFull) -> str:
+    """כותרת מהקוד, ותקציר מהמודל.
+
+    ⚠️ **הוכרע 23.11.2026: הבוט אינו מדפיס את מלל המייל.** הטריאז' עבר
+    למסך בדשבורד, ותפקיד הבוט כאן הוא לומר מה יש במייל — בייחוד מחוץ
+    לרשת אלחוטית, שבה המסך חסום. הכותרת, הקבצים והתאריך נבנים **בקוד**
+    ולא על ידי מודל, ולכן הם לא יכולים להשתנות בגלל טקסט שבתוך המייל.
+    """
     head = [
         f"מאת: {mail.sender()}",
         f"נושא: {mail.subject}",
@@ -270,18 +277,32 @@ def _render(mail: gmail.EmailFull) -> str:
     if mail.attachments:
         # שמות בלבד. הקבצים עצמם אינם מורדים ואינם נשמרים
         head.append("מצורף: " + ", ".join(mail.attachments[:5]))
-    body = mail.body.strip() or "(המייל ריק)"
-    text = "\n".join(head) + "\n\n" + body
-    if mail.quoted_removed:
-        text += "\n\n— (ההיסטוריה המצוטטת הושמטה)"
-    return text
+
+    if not mail.body.strip():
+        return "\n".join(head) + "\n\n(המייל ריק)"
+
+    try:
+        return "\n".join(head) + "\n\n" + gmail.summarize(mail)
+    except gmail.SummaryFailed as exc:
+        # ⚠️ נפילה מבוקרת: שורות פתיחה חסומות באורך, ולא המייל המלא.
+        # להציג כלום היה גרוע יותר, ולהציג הכול היה חזרה להתנהגות
+        # שהוכרע לבטל
+        log.warning("תקצור המייל נכשל: %s", exc)
+        opening = mail.body.strip()[: gmail.FALLBACK_CHARS].strip()
+        return (
+            "\n".join(head)
+            + "\n\nלא הצלחתי לתקצר. אלה השורות הראשונות:\n"
+            + opening
+        )
 
 
 def show_email(db: Session, intent: Intent) -> Outcome:
-    """"תראה לי את כל מייל 2" — המייל המלא, בלי ההיסטוריה המצוטטת.
+    """"תראה לי את מייל 2" — **תקציר** של המייל, ולא המלל שלו.
 
-    ‏⚠️ שום מודל אינו מופעל בדרך. המייל עובר מגוגל לוואטסאפ דרך הקוד
-    בלבד, וזו ההגנה החזקה מפני טקסט שנראה כהוראה בתוך מייל.
+    ‏⚠️ **שונה ב-23.11.2026.** עד אז הוא הדפיס את המייל המלא, וזו הייתה
+    תכונת אבטחה: שום מודל לא נגע בתוכן. ההכרעה העבירה את הטריאז' למסך
+    והשאירה לבוט תקציר, ולכן התוכן כן מגיע למודל — מוגן באותו דפוס של
+    הסינון, ומתועד ב-``gmail.summarize``.
     """
     blocked = _ready(db)
     if blocked:
