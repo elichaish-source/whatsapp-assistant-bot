@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from .. import gauth, gmail
 from ..auth import require_user
 from ..db import get_db
-from ..schemas import EmailBodyOut, EmailItemOut, EmailListOut
+from ..schemas import EmailBodyOut, EmailIdsIn, EmailIdsOut, EmailItemOut, EmailListOut
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/emails", tags=["emails"], dependencies=[Depends(require_user)])
@@ -89,6 +89,7 @@ def list_emails(
             unread=item.email.unread,
             has_attachments=item.email.has_attachments,
             thread_count=item.email.thread_count,
+            thread_ids=item.email.thread_ids or [item.email.id],
         )
         for item in triaged
     ]
@@ -106,35 +107,44 @@ def list_emails(
     )
 
 
-@router.post("/{message_id}/archive")
-def archive_email(message_id: str, db: Session = Depends(get_db)) -> dict:
-    """מוציא מייל מהדואר הנכנס (שלב 4-4).
+@router.post("/archive", response_model=EmailIdsOut)
+def archive_emails(payload: EmailIdsIn, db: Session = Depends(get_db)) -> EmailIdsOut:
+    """מוציא מיילים מהדואר הנכנס (שלב 4-4).
 
-    ⚠️ **אינו מוחק דבר**, ולכן אינו דורש אישור: המייל נשאר בתיבה, נמצא
-    בחיפוש, ו-``/unarchive`` מחזיר אותו. זאת הסיבה שהכפתור פועל מיד
-    ובלי שאלה, ושהביטול הוא כפתור ולא תקווה.
+    ⚠️ **אינו מוחק דבר**, ולכן אינו דורש אישור בשרת: המיילים נשארים
+    בתיבה, נמצאים בחיפוש, ו-``/unarchive`` מחזיר אותם. זאת הסיבה
+    שהארכוב פועל מיד, ושהביטול הוא כפתור ולא תקווה.
+
+    ⚠️⚠️ **רשימה ולא מזהה אחד.** שורה במסך היא שרשור, וארכוב ההודעה
+    האחרונה בלבד השאיר את הישנה בדואר הנכנס — והשורה חזרה ברענון הבא.
+    אותו נתיב משרת גם ארכוב של שרשור אחד וגם של כל הלא-חשובים יחד.
+
+    **מחזיר את מה שהוצא בפועל**, והמסך שולח בדיוק אותו ל-``/unarchive``.
     """
-    return _write(db, gmail.archive, message_id)
+    return EmailIdsOut(ids=_write(db, gmail.archive, payload.ids))
 
 
-@router.post("/{message_id}/unarchive")
-def unarchive_email(message_id: str, db: Session = Depends(get_db)) -> dict:
-    """מחזיר מייל לדואר הנכנס. הביטול של הארכוב."""
-    return _write(db, gmail.unarchive, message_id)
+@router.post("/unarchive", response_model=EmailIdsOut)
+def unarchive_emails(payload: EmailIdsIn, db: Session = Depends(get_db)) -> EmailIdsOut:
+    """מחזיר מיילים לדואר הנכנס. הביטול של הארכוב.
+
+    ⚠️ **מקבל בדיוק את מה שהארכוב החזיר**, ולא את כל השרשור: אחרת
+    הביטול היה מחזיר הודעה שהייתה מארוכבת עוד קודם.
+    """
+    return EmailIdsOut(ids=_write(db, gmail.unarchive, payload.ids))
 
 
-def _write(db: Session, action, message_id: str) -> dict:
+def _write(db: Session, action, ids: list[str]) -> list[str]:
     """הכתיבות אל התיבה חולקות את אותו טיפול בשגיאות כמו הקריאות."""
     _require_connection(db)
     try:
-        action(db, message_id)
+        return action(db, ids)
     except gauth.GoogleDisconnected as exc:
         log.warning("החיבור לגוגל נפסל באמצע שינוי תוויות: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DISCONNECTED) from exc
     except (gmail.GmailError, gauth.GoogleError) as exc:
         log.warning("שינוי תוויות נכשל: %s", exc)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
-    return {"ok": True}
 
 
 @router.get("/{message_id}", response_model=EmailBodyOut)

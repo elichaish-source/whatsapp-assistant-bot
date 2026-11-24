@@ -92,6 +92,12 @@ class EmailSummary:
     # ⚠️ נקבע ב-``collapse_threads``, ומוצג למשתמש כדי ששורה שמאחוריה
     # שתי הודעות לא תיראה כאילו אחת מהן נעלמה
     thread_count: int = 1
+    # ⚠️⚠️ **כל ההודעות של השרשור שנמצאות בדואר הנכנס**, ולא כל
+    # השרשור. זה מה שהארכוב פועל עליו: ארכוב ההודעה האחרונה בלבד השאיר
+    # את הישנה עם ``INBOX``, והשורה חזרה ברענון הבא. ⚠️ וזה גם מה
+    # שהביטול מחזיר — לא כל השרשור, אחרת הוא היה מחזיר לדואר הנכנס
+    # הודעה שהייתה מארוכבת עוד קודם
+    thread_ids: list[str] = field(default_factory=list)
 
     def sender(self) -> str:
         """השם להצגה. כשאין שם, הכתובת עצמה."""
@@ -227,43 +233,68 @@ def _get(db: Session, path: str, params: dict | None = None) -> dict:
 INBOX_LABEL = "INBOX"
 
 
-def _modify(db: Session, message_id: str, payload: dict) -> None:
-    """שינוי תוויות של מייל אחד. ⚠️ **הכתיבה היחידה אל התיבה.**
+# תקרת המזהים בקריאה אחת, לפי גוגל. ‏SCREEN_LIMIT הוא 100, ולכן גם
+# ארכוב של כל הלא-חשובים נכנס בקריאה אחת
+BATCH_CAP = 1000
 
-    ‏``users.messages.modify`` ולא ``trash`` ולא ``delete``: הראשון מזיז
-    את המייל בין תצוגות, והאחרים מוציאים אותו מהישג יד. ההרשאה
+
+def _batch_modify(db: Session, ids: list[str], payload: dict) -> list[str]:
+    """שינוי תוויות של כמה מיילים. ⚠️ **הכתיבה היחידה אל התיבה.**
+
+    ‏``users.messages.batchModify`` ולא ``trash`` ולא ``delete``: הראשון
+    מזיז מיילים בין תצוגות, והאחרים מוציאים אותם מהישג יד. ההרשאה
     ‏``gmail.modify`` שבידינו אינה מאפשרת מחיקה לצמיתות ממילא.
+
+    ⚠️ **אצווה ולא לולאה:** ארכוב של שרשור או של כל הלא-חשובים הוא
+    קריאת רשת אחת, ולא אחת לכל מייל. ‏``batchModify`` מחזיר 204 בלי גוף.
+
+    מחזיר את המזהים שנשלחו, כדי שהקורא יוכל להחזיר בדיוק אותם בביטול.
     """
+    wanted = [str(item) for item in ids if item]
+    if not wanted:
+        return []
+    if len(wanted) > BATCH_CAP:
+        raise GmailError(f"יותר מ-{BATCH_CAP} מיילים בבקשה אחת")
+
     token = gauth.access_token(db)
     try:
         response = httpx.post(
-            f"{API}/messages/{message_id}/modify",
-            json=payload,
+            f"{API}/messages/batchModify",
+            json={"ids": wanted, **payload},
             headers={"Authorization": f"Bearer {token}"},
             timeout=TIMEOUT,
         )
     except httpx.HTTPError as exc:
         raise GmailError(f"הפנייה לגוגל נכשלה: {exc}") from exc
 
-    if response.status_code == 404:
-        raise GmailError("המייל לא נמצא בתיבה")
     if response.status_code >= 400:
         log.warning("גוגל החזירה %s על שינוי תוויות", response.status_code)
         raise GmailError(f"גוגל החזירה {response.status_code}")
+    return wanted
 
 
-def archive(db: Session, message_id: str) -> None:
-    """מוציא מייל מהדואר הנכנס.
+def archive(db: Session, ids: list[str]) -> list[str]:
+    """מוציא מיילים מהדואר הנכנס, ומחזיר את מי שהוצא.
 
-    ⚠️ **אינו מוחק דבר.** המייל נשאר בתיבה, נמצא בחיפוש, ו-``unarchive``
-    מחזיר אותו בדיוק למקום שממנו יצא. זה מה שמאפשר כפתור "ביטול" אמיתי.
+    ⚠️ **אינו מוחק דבר.** המיילים נשארים בתיבה, נמצאים בחיפוש,
+    ו-``unarchive`` מחזיר אותם בדיוק למקום שממנו יצאו. זה מה שמאפשר
+    כפתור "ביטול" אמיתי.
+
+    ⚠️⚠️ **מקבל רשימה ולא מזהה אחד, וזה לא נוחות.** הרשימה במסך מציגה
+    שורה לכל שרשור, וארכוב ההודעה האחרונה בלבד השאיר את הישנה בדואר
+    הנכנס — והשורה חזרה ברענון הבא.
     """
-    _modify(db, message_id, {"removeLabelIds": [INBOX_LABEL]})
+    return _batch_modify(db, ids, {"removeLabelIds": [INBOX_LABEL]})
 
 
-def unarchive(db: Session, message_id: str) -> None:
-    """מחזיר מייל לדואר הנכנס. הביטול של ``archive``."""
-    _modify(db, message_id, {"addLabelIds": [INBOX_LABEL]})
+def unarchive(db: Session, ids: list[str]) -> list[str]:
+    """מחזיר מיילים לדואר הנכנס. הביטול של ``archive``.
+
+    ⚠️ **מקבל בדיוק את מה ש-``archive`` החזיר**, ולא את כל השרשור:
+    אחרת הביטול היה מחזיר לדואר הנכנס הודעה שהייתה מארוכבת עוד קודם,
+    והמשתמש היה מקבל בחזרה משהו שלא ארכב מעולם.
+    """
+    return _batch_modify(db, ids, {"addLabelIds": [INBOX_LABEL]})
 
 
 def _message_ids(db: Session, query: str, limit: int) -> list[str]:
@@ -457,26 +488,23 @@ def collapse_threads(found: list[EmailSummary]) -> list[EmailSummary]:
     מאוחדים על פני השרשור — מייל שלא נקרא בתוך שרשור אינו מפסיק להיות
     כזה רק מפני שהודעה חדשה יותר כבר נקראה.
     """
-    newest: dict[str, EmailSummary] = {}
+    groups: dict[str, list[EmailSummary]] = {}
     for item in found:
         # שרשור ריק לא אמור לקרות, אבל מזהה ריק היה מאחד מיילים זרים
         key = item.thread_id or f"id:{item.id}"
-        kept = newest.get(key)
-        if kept is None:
-            newest[key] = item
-            continue
-        if item.received_at > kept.received_at:
-            item.thread_count = kept.thread_count
-            item.unread = item.unread or kept.unread
-            item.has_attachments = item.has_attachments or kept.has_attachments
-            newest[key] = item
-            kept = item
-        else:
-            kept.unread = kept.unread or item.unread
-            kept.has_attachments = kept.has_attachments or item.has_attachments
-        kept.thread_count += 1
+        groups.setdefault(key, []).append(item)
 
-    collapsed = list(newest.values())
+    collapsed = []
+    for members in groups.values():
+        row = max(members, key=lambda item: item.received_at)
+        row.thread_count = len(members)
+        row.unread = any(item.unread for item in members)
+        row.has_attachments = any(item.has_attachments for item in members)
+        # ⚠️ **כל ההודעות של השרשור שהיו ברשימה**, כלומר שנמצאות בדואר
+        # הנכנס. זה מה שהארכוב פועל עליו, וזה מה שהביטול מחזיר
+        row.thread_ids = [item.id for item in members]
+        collapsed.append(row)
+
     collapsed.sort(key=lambda item: item.received_at, reverse=True)
     return collapsed
 
@@ -530,6 +558,40 @@ def search(db: Session, text: str, limit: int = SEARCH_LIMIT) -> list[EmailSumma
 # --- המייל המלא ---
 
 
+# עוגן עם כתובת. ⚠️ ``[^"']+`` ולא ``.*?``: כתובת אינה מכילה מרכאות,
+# וביטוי רעב היה בולע את שאר התגית
+_ANCHOR = re.compile(
+    r'(?is)<a\b[^>]*?\bhref\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</a>'
+)
+
+
+def _keep_links(raw: str) -> str:
+    """משמר את הכתובת של כל קישור לפני שהתגיות יורדות.
+
+    ⚠️⚠️ **זה היה באג אמיתי (24.11.2026).** הסרת התגיות מחקה את ``<a>``
+    **יחד עם ה-href**, ולכן במייל HTML שכתוב בו "לחץ כאן" הכתובת לא
+    הייתה קיימת בגוף בכלל — ושום תיקון בצד הלקוח לא היה עוזר. רוב
+    המיילים האמיתיים הם HTML, ולכן זה היה שורש הבעיה.
+
+    ⚠️ **רק ``http`` ו-``https``.** בכתובת ``javascript:`` או ``data:``
+    נשמר טקסט העוגן בלבד, והכתובת נזרקת — את הטקסט הזה כתב אדם אחר.
+
+    ⚠️ **הכתובת נוספת רק כשטקסט העוגן אינו הכתובת עצמה**, אחרת כל קישור
+    במייל שיווקי היה מופיע פעמיים.
+    """
+
+    def swap(match: re.Match) -> str:
+        url = html.unescape(match.group(1)).strip()
+        label = html.unescape(re.sub(r"(?s)<[^>]+>", "", match.group(2))).strip()
+        if not url.lower().startswith(("http://", "https://")):
+            return label
+        if not label or label == url:
+            return url
+        return f"{label} ({url})"
+
+    return _ANCHOR.sub(swap, raw)
+
+
 def _html_to_text(raw: str) -> str:
     """טקסט קריא מתוך HTML, בלי תלות חדשה.
 
@@ -538,6 +600,7 @@ def _html_to_text(raw: str) -> str:
     אחרת התוכן שלהם היה נראה כטקסט המייל.
     """
     text = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", raw)
+    text = _keep_links(text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|tr|li|h[1-6])\s*>", "\n", text)
     text = re.sub(r"(?s)<[^>]+>", "", text)

@@ -769,3 +769,52 @@ pre {
 .mail-undo span {
   flex: 1 1 240px;
 }
+
+/* קישור בתוך גוף מייל. ⚠️ נבנה כרכיב React ולא מ-HTML של המייל */
+.mail-link {
+  color: var(--primary);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+/* --- החלקה לארכוב --- */
+
+/* השורה יושבת מעל רקע שמתגלה בזמן הגרירה */
+.mail-slot {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.mail-swipe {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-inline-start: 18px;
+  border-radius: 12px;
+  background: var(--pill);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* חצינו את הסף: שחרור עכשיו יארכב */
+.mail-swipe.armed {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.mail-slot .mail {
+  position: relative;
+  transition: transform 0.18s ease;
+  /* ⚠️ הגלילה האנכית נשארת של הדפדפן, והאופקית שלנו */
+  touch-action: pan-y;
+}
+
+/* ⚠️ כפתור הארכוב רק במכשירים עם עכבר. בנייד מארכבים בהחלקה, ובלי זה
+   הכפתור תופס מקום בכל שורה בשביל פעולה שיש לה כבר תנועה */
+@media (hover: none) {
+  .mail-actions {
+    display: none;
+  }
+}

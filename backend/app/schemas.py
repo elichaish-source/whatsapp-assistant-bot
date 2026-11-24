@@ -295,6 +295,10 @@ class EmailItemOut(BaseModel):
     # כמה הודעות יש בשרשור שהשורה מייצגת. ⚠️ מוצג למשתמש, כדי ששורה
     # שמאחוריה שתי הודעות לא תיראה כאילו אחת מהן נעלמה
     thread_count: int = 1
+    # ⚠️ כל ההודעות של השרשור שנמצאות בדואר הנכנס. **זה מה שהמסך שולח
+    # לארכוב**, ולא ``id`` לבדו — אחרת הודעה ישנה בשרשור נשארת בדואר
+    # הנכנס והשורה חוזרת ברענון הבא
+    thread_ids: list[str] = []
 
 
 class EmailListOut(BaseModel):
@@ -306,6 +310,22 @@ class EmailListOut(BaseModel):
     other: int = 0
     # האם נגענו בתקרת השליפה. המסך אומר את זה למשתמש
     truncated: bool = False
+
+
+class EmailIdsIn(BaseModel):
+    """המיילים שעליהם פועלים: שרשור אחד, או כל הלא-חשובים יחד.
+
+    ⚠️ **המזהים מגיעים מהמסך ואינם מחושבים מחדש בשרת.** אחרת מייל
+    שנכנס בין הטעינה ללחיצה היה מתארכב בלי שהמשתמש ראה אותו.
+    """
+
+    ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+class EmailIdsOut(BaseModel):
+    """מה שהוצא בפועל. המסך שומר את זה, ושולח אותו חזרה בביטול."""
+
+    ids: list[str] = []
 
 
 class EmailBodyOut(BaseModel):
