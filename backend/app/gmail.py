@@ -1532,3 +1532,149 @@ def remember_prepared(
 def clear_prepared() -> None:
     """לבדיקות, ולמי שרוצה להכין הכול מחדש."""
     _prepared.clear()
+
+
+# --- מי מחכה למי (שלב 4-6) ---
+#
+# ⚠️ **אין כאן שום קריאה למודל.** מי ענה אחרון הוא עובדה שקוראים
+# מהכותרות, ולא שיקול דעת. זה גם מה שהופך את ההתראות לזולות.
+
+# כמה שרשורים נסרקים. ⚠️ תקרה ולא "הכול": סריקה היא קריאת רשת לכל
+# שרשור, והמספר שמעניין הוא מי מחכה — לא רשימה מלאה של ההיסטוריה
+ALERT_SCAN = 40
+# מעל כמה ימים נחשב "מחכה". ⚠️ שלושה, לשני הכיוונים — הוכרע 23.11.2026
+# ושינה את מה שנקבע ב-17.11 (יומיים לכיוון אחד, ארבעה לשני)
+ALERT_DAYS = 3
+
+
+@dataclass
+class Waiting:
+    """שרשור שמישהו בו מחכה. ⚠️ בלי נושא ובלי גוף — שם וימים בלבד."""
+
+    thread_id: str
+    who: str
+    days: int
+
+
+def _thread_tail(db: Session, thread_id: str) -> tuple[str, datetime] | None:
+    """השולח והזמן של ההודעה האחרונה בשרשור.
+
+    ‏``format=metadata`` עם שתי כותרות בלבד: מי שלח ומתי. הגוף אינו
+    נשלף, ולכן גם לא עובר.
+    """
+    data = _get(
+        db,
+        f"threads/{thread_id}",
+        {"format": "metadata", "metadataHeaders": ["From"]},
+    )
+    messages = data.get("messages") or []
+    if not messages:
+        return None
+    last = messages[-1]
+    name, address = parseaddr(_headers(last.get("payload") or {}).get("from", ""))
+    return (address.strip().lower(), _received(last))
+
+
+def _scan(db: Session, query: str, me: str, mine_last: bool, days: int) -> list[Waiting]:
+    """סורק שרשורים ומחזיר את אלה שההודעה האחרונה בהם מתאימה.
+
+    ‏``mine_last`` אומר איזה כיוון מחפשים: ``True`` — אני כתבתי אחרון
+    ואיש לא ענה; ``False`` — הם כתבו אחרון ואני לא עניתי.
+    """
+    me = me.strip().lower()
+    cutoff = datetime.now(tz=local_tz()) - timedelta(days=days)
+    data = _get(db, "threads", {"q": query, "maxResults": ALERT_SCAN})
+
+    found = []
+    for item in data.get("threads") or []:
+        thread_id = str(item.get("id") or "")
+        if not thread_id:
+            continue
+        try:
+            tail = _thread_tail(db, thread_id)
+        except GmailError as exc:
+            log.warning("דילוג על שרשור %s: %s", thread_id, exc)
+            continue
+        if tail is None:
+            continue
+        sender, when = tail
+        if (sender == me) != mine_last:
+            continue
+        if when > cutoff:
+            continue
+        found.append(
+            Waiting(
+                thread_id=thread_id,
+                # ⚠️ כשאני כתבתי אחרון, "מי" הוא מי שלא ענה — ואותו
+                # אפשר לדעת רק מהנמען, ולכן נשלף מהשרשור עצמו
+                who=sender if not mine_last else _thread_other(db, thread_id, me),
+                days=max(1, (datetime.now(tz=local_tz()) - when).days),
+            )
+        )
+    return found
+
+
+def _thread_other(db: Session, thread_id: str, me: str) -> str:
+    """הצד השני בשרשור: השולח הראשון שאינו אני."""
+    try:
+        data = _get(
+            db,
+            f"threads/{thread_id}",
+            {"format": "metadata", "metadataHeaders": ["From", "To"]},
+        )
+    except GmailError:
+        return ""
+    for message in data.get("messages") or []:
+        head = _headers(message.get("payload") or {})
+        for field in ("from", "to"):
+            _, address = parseaddr(head.get(field, ""))
+            address = address.strip().lower()
+            if address and address != me:
+                return address
+    return ""
+
+
+def waiting_for_you(db: Session, me: str, days: int = ALERT_DAYS) -> list[Waiting]:
+    """שרשורים שבהם מישהו כתב אחרון ואתה לא ענית.
+
+    ⚠️ ``in:inbox`` בכוונה: מה שארכבת כבר טופל, גם אם לא ענית בכתב.
+    """
+    return _scan(db, f"in:inbox -in:chats older_than:{days}d", me, mine_last=False, days=days)
+
+
+def awaiting_reply(db: Session, me: str, days: int = ALERT_DAYS) -> list[Waiting]:
+    """שרשורים שבהם אתה כתבת אחרון ואיש לא ענה."""
+    return _scan(db, f"in:sent -in:chats older_than:{days}d", me, mine_last=True, days=days)
+
+
+@dataclass
+class InboxCounts:
+    """המספרים לסיכום. ⚠️ **מספרים בלבד** — בלי נושא ובלי שולח."""
+
+    week: int
+    today: int
+    important_today: int
+
+
+def inbox_counts(db: Session) -> InboxCounts:
+    """כמה נכנס, בלי לפתוח שום מייל.
+
+    ⚠️ **``resultSizeEstimate`` ולא שליפה של הרשימה:** לספירה לא צריך
+    את המיילים עצמם, וכך הסיכום אינו נוגע בתוכן כלל ואינו עולה דבר.
+    """
+
+    def count(query: str) -> int:
+        try:
+            data = _get(db, "messages", {"q": query, "maxResults": 1})
+        except GmailError as exc:
+            log.warning("ספירה נכשלה: %s", exc)
+            return 0
+        return int(data.get("resultSizeEstimate") or 0)
+
+    week = count(f"in:inbox -in:chats after:{_midnight(7)}")
+    today_query = f"in:inbox -in:chats after:{_midnight(0)}"
+    return InboxCounts(
+        week=week,
+        today=count(today_query),
+        important_today=count(f"{today_query} is:unread {_EXCLUDED_TABS}"),
+    )

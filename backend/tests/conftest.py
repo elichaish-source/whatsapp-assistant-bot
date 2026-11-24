@@ -47,7 +47,8 @@ def clean_db():
             text(
                 "TRUNCATE bot_messages, observations, memory_facts, tasks, recurrences, projects,"
                 " client_family_links, clients,"
-                " login_codes, auth_sessions, google_credentials RESTART IDENTITY CASCADE"
+                " login_codes, auth_sessions, google_credentials, email_alerts"
+                " RESTART IDENTITY CASCADE"
             )
         )
 
