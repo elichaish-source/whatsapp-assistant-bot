@@ -316,7 +316,7 @@ def test_the_second_triage_of_the_same_mail_does_not_call_the_model(monkeypatch)
 
     def counted(emails):
         calls.append(len(emails))
-        return {index: (True, "שורה") for index, _ in enumerate(emails, start=1)}
+        return {index: (True, "שורה", False) for index, _ in enumerate(emails, start=1)}
 
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
     monkeypatch.setattr(gmail, "_ask_haiku", counted)
@@ -346,7 +346,7 @@ def test_only_the_uncached_mails_are_sent_to_the_model(monkeypatch):
 
 def test_the_cached_verdict_is_the_one_the_model_gave(monkeypatch):
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת", False)})
     assert gmail.triage([summary(1)])[0].relevant is False
     # ובפעם השנייה, מהמטמון, אותה הכרעה
     monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: pytest.fail("אין לקרוא שוב"))
@@ -355,10 +355,10 @@ def test_the_cached_verdict_is_the_one_the_model_gave(monkeypatch):
 
 def test_an_expired_entry_is_asked_again(monkeypatch):
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת", False)})
     gmail.triage([summary(1)])
     monkeypatch.setattr(gmail, "TRIAGE_TTL", -gmail.TRIAGE_TTL)
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "עבר עכשיו")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "עבר עכשיו", False)})
     assert gmail.triage([summary(1)])[0].line == "עבר עכשיו"
 
 
@@ -372,7 +372,7 @@ def test_a_failed_triage_is_not_cached(monkeypatch):
     monkeypatch.setattr(gmail, "_ask_haiku", boom)
     assert gmail.triage([summary(1)])[0].relevant is True
 
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת", False)})
     assert gmail.triage([summary(1)])[0].relevant is False
 
 
@@ -381,7 +381,7 @@ def test_a_mail_the_model_forgot_is_not_cached(monkeypatch):
     monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {})
     assert gmail.triage([summary(1)])[0].relevant is True
 
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת", False)})
     assert gmail.triage([summary(1)])[0].relevant is False
 
 
@@ -390,7 +390,7 @@ def test_the_cache_is_bounded(monkeypatch):
     monkeypatch.setattr(
         gmail,
         "_ask_haiku",
-        lambda emails: {index: (True, "שורה") for index, _ in enumerate(emails, start=1)},
+        lambda emails: {index: (True, "שורה", False) for index, _ in enumerate(emails, start=1)},
     )
     monkeypatch.setattr(gmail, "TRIAGE_CACHE_MAX", 5)
     for number in range(1, 20):
@@ -400,10 +400,10 @@ def test_the_cache_is_bounded(monkeypatch):
 
 def test_clearing_the_cache_makes_the_model_run_again(monkeypatch):
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "ראשונה")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "ראשונה", False)})
     gmail.triage([summary(1)])
     gmail.clear_triage_cache()
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "שנייה")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "שנייה", False)})
     assert gmail.triage([summary(1)])[0].line == "שנייה"
 
 
@@ -803,7 +803,7 @@ def test_a_long_list_is_split_into_batches(monkeypatch):
 
     def counted(emails):
         sizes.append(len(emails))
-        return {index: (True, "שורה") for index, _ in enumerate(emails, start=1)}
+        return {index: (True, "שורה", False) for index, _ in enumerate(emails, start=1)}
 
     monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
     monkeypatch.setattr(gmail, "_ask_haiku", counted)
@@ -837,7 +837,7 @@ def test_every_mail_keeps_its_own_verdict_across_batches(monkeypatch):
         gmail,
         "_ask_haiku",
         lambda emails: {
-            index: (index != 1, f"שורה של {item.id}")
+            index: (index != 1, f"שורה של {item.id}", False)
             for index, item in enumerate(emails, start=1)
         },
     )
@@ -856,7 +856,7 @@ def test_one_failed_batch_does_not_lose_the_others(monkeypatch):
     def flaky(emails):
         if any(item.id == "id-0" for item in emails):
             raise ValueError("התשובה נחתכה")
-        return {index: (False, "פרסומת") for index, _ in enumerate(emails, start=1)}
+        return {index: (False, "פרסומת", False) for index, _ in enumerate(emails, start=1)}
 
     monkeypatch.setattr(gmail, "_ask_haiku", flaky)
     count = gmail.TRIAGE_BATCH + 2
@@ -876,7 +876,7 @@ def test_the_mails_of_a_failed_batch_are_not_cached(monkeypatch):
     monkeypatch.setattr(gmail, "_ask_haiku", boom)
     assert gmail.triage([summary(1)])[0].relevant is True
 
-    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת")})
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (False, "פרסומת", False)})
     assert gmail.triage([summary(1)])[0].relevant is False
 
 
@@ -1414,3 +1414,74 @@ def _mail_for_reply():
         received_at=datetime(2026, 11, 24, 9, 0, tzinfo=IL),
         body="כמה זה עולה?",
     )
+
+
+# --- "דורש מענה" ---
+
+
+def test_needs_reply_comes_back_from_the_model(monkeypatch):
+    """⚠️ שדה נוסף באותה קריאה שכבר רצה — עלות אפס."""
+    fake_anthropic(
+        monkeypatch,
+        '{"items": [{"n": 1, "relevant": true, "needs_reply": true, "line": "שאלה"},'
+        ' {"n": 2, "relevant": true, "needs_reply": false, "line": "חשבונית"}]}',
+    )
+    result = gmail.triage([summary(1), summary(2)])
+    assert [item.needs_reply for item in result] == [True, False]
+    # ⚠️ שניהם חשובים: "דורש מענה" אינו "חשוב"
+    assert all(item.relevant for item in result)
+
+
+def test_a_mail_the_model_forgot_does_not_need_a_reply(monkeypatch):
+    """⚠️ הכנת טיוטה יקרה, ולכן אינה ברירת המחדל כשאין תשובה."""
+    fake_anthropic(monkeypatch, '{"items": []}')
+    result = gmail.triage([summary(1)])
+    assert result[0].relevant is True
+    assert result[0].needs_reply is False
+
+
+def test_needs_reply_survives_the_cache(monkeypatch):
+    monkeypatch.setattr(gmail.get_settings(), "anthropic_api_key", "test-key")
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: {1: (True, "שאלה", True)})
+    assert gmail.triage([summary(1)])[0].needs_reply is True
+    monkeypatch.setattr(gmail, "_ask_haiku", lambda emails: pytest.fail("אין לקרוא שוב"))
+    assert gmail.triage([summary(1)])[0].needs_reply is True
+
+
+def test_the_triage_prompt_separates_needs_reply_from_important():
+    """⚠️ חשבונית חשובה, אבל עונים עליה בתשלום ולא במילים."""
+    assert "needs_reply" in gmail.TRIAGE_PROMPT
+    assert "תשובה בכתב" in gmail.TRIAGE_PROMPT
+
+
+# --- המטמון של הטיוטות ---
+
+
+def test_a_prepared_draft_has_no_expiry(monkeypatch):
+    """⚠️⚠️ בשונה ממטמון הסיווג. סיווג זול ומשתנה; טיוטה יקרה ולא
+    משתנה, כי המייל כבר נכתב. תפוגה הייתה מייצרת אותה מחדש בלולאה."""
+    gmail.clear_prepared()
+    long_ago = datetime(2020, 1, 1, tzinfo=IL)
+    gmail.remember_prepared("gid-1", long_ago, task=gmail.TaskDraft("לעשות", "", ""))
+    assert gmail.prepared_for("gid-1") is not None
+    gmail.clear_prepared()
+
+
+def test_preparing_a_reply_does_not_erase_the_task_draft():
+    gmail.clear_prepared()
+    moment = datetime(2026, 11, 24, 9, 0, tzinfo=IL)
+    gmail.remember_prepared("gid-1", moment, task=gmail.TaskDraft("לעשות", "", ""))
+    gmail.remember_prepared("gid-1", moment, replies=[gmail.ReplyOption("מאשר", "בסדר")])
+    ready = gmail.prepared_for("gid-1")
+    assert ready.task is not None and ready.replies
+    gmail.clear_prepared()
+
+
+def test_the_prepared_cache_is_bounded(monkeypatch):
+    gmail.clear_prepared()
+    monkeypatch.setattr(gmail, "PREPARED_MAX", 5)
+    moment = datetime(2026, 11, 24, 9, 0, tzinfo=IL)
+    for number in range(20):
+        gmail.remember_prepared(f"gid-{number}", moment, task=gmail.TaskDraft("x", "", ""))
+    assert len(gmail._prepared) <= 6
+    gmail.clear_prepared()
