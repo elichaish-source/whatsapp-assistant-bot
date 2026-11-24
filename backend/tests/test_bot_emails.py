@@ -582,9 +582,10 @@ def test_a_failed_summary_shows_a_bounded_opening_and_says_so(db, connected, mon
     listed(db, ["gid-1"])
     reply = actions.execute(db, Intent(action="show_email", task_number=1)).reply
     assert "לא הצלחתי לתקצר" in reply
-    # ⚠️ הגוף חסום, ולא יוצא במלואו
-    assert reply.count("א") <= gmail.FALLBACK_CHARS
+    # ⚠️ הגוף חסום, ולא יוצא במלואו. נבדק באורך ולא בספירת תווים, כי
+    # המילה "נושא" בכותרת נגמרת ב-א וספירה תמימה נכשלה על התו הזה
     assert long_body not in reply
+    assert len(reply) < gmail.FALLBACK_CHARS + 300
 
 
 def test_an_empty_mail_is_not_sent_to_the_model(db, connected, monkeypatch):

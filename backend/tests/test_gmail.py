@@ -803,8 +803,13 @@ def test_summarize_caps_what_it_sends(monkeypatch):
     """⚠️ מייל ארוך מאוד היה מייקר את הקריאה בלי להוסיף."""
     captured: dict = {}
     fake_anthropic(monkeypatch, '{"summary": "תקציר"}', captured)
-    gmail.summarize(full_mail(body="א" * 50_000))
-    assert captured["messages"][0]["content"].count("א") <= gmail.SUMMARY_INPUT_CHARS
+    body = "א" * 50_000
+    gmail.summarize(full_mail(body=body))
+    content = captured["messages"][0]["content"]
+    # ⚠️ לא ספירת תווים: המילה "נושא" בכותרת נגמרת ב-א, וספירה תמימה
+    # נכשלה על התו הזה. מה שנבדק הוא האורך, ושהגוף המלא אינו נשלח
+    assert len(content) < gmail.SUMMARY_INPUT_CHARS + 500
+    assert body not in content
 
 
 def test_summarize_without_a_key_fails_instead_of_inventing(monkeypatch):
