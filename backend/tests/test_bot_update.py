@@ -79,7 +79,9 @@ def test_update_finds_a_dashboard_task_by_a_word_from_its_title(db, say):
     row = say(Intent(action="update_task", task_text="ביטוח", due_date=next_week()))
     db.refresh(task)
     assert task.due_date == today() + timedelta(days=7)
-    assert "עודכן: לחדש את הביטוח" in row.reply
+    # ⚠️ התשובה אומרת גם מה השתנה, ולא רק את הכותרת (תוקן 24.11.2026)
+    assert "לחדש את הביטוח" in row.reply
+    assert "תאריך היעד" in row.reply
     assert row.task_id == task.id
 
 
