@@ -362,6 +362,7 @@ def digest_text(counts, waiting: list, silent: list) -> str:
 
 def alert_text(item, kind: str) -> str:
     """התראה על שרשור אחד. ⚠️ שם וימים — בלי נושא ובלי תוכן."""
+    # מול התיבה האמיתית היה שרשור אחד שבו לא נמצאה כתובת לצד השני
     who = item.who or "מישהו"
     if kind == "waiting":
         return f"{who} מחכה לתשובה ממך כבר {item.days} ימים."
@@ -415,9 +416,14 @@ def send_mail_digest(db: Session, moment: datetime | None = None) -> int:
     except waha.WahaError:
         log.exception("שליחת סיכום המיילים נכשלה")
 
-    # ⚠️ ההתראות אחרי הסיכום, וכל אחת פעם אחת בלבד
+    # ⚠️⚠️ ההתראות אחרי הסיכום, כל אחת פעם אחת, ועד תקרה לסבב.
+    # מול התיבה האמיתית נמצאו 22 שרשורים שאיש לא ענה בהם — וכולם היו
+    # יוצאים ברצף. מי שמקבל 22 הודעות קורא אפס מהן
+    budget = gmail.ALERT_PER_RUN
     for kind, items in (("waiting", waiting), ("silent", silent)):
         for item in items:
+            if budget <= 0:
+                break
             if _already_alerted(db, item.thread_id, kind):
                 continue
             try:
@@ -428,6 +434,7 @@ def send_mail_digest(db: Session, moment: datetime | None = None) -> int:
             except waha.WahaError:
                 log.exception("שליחת התראה על %s נכשלה", item.thread_id)
                 continue
+            budget -= 1
             db.add(EmailAlert(thread_id=item.thread_id, kind=kind, alerted_at=moment))
             db.commit()
 

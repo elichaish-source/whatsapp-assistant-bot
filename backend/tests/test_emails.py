@@ -1238,3 +1238,58 @@ def reminders_digest_text():
     from app.bot import reminders
 
     return reminders.digest_text(counts(), [], [])
+
+
+# --- מה שנתפס מול התיבה האמיתית ---
+
+
+def test_at_most_a_handful_of_alerts_per_run(db, connected, monkeypatch, sent):
+    """⚠️⚠️ מול התיבה האמיתית נמצאו 22 שרשורים שאיש לא ענה בהם, וכולם
+    היו יוצאים ברצף. מי שמקבל 22 הודעות וואטסאפ קורא אפס מהן."""
+    from app.bot import reminders
+
+    many = [waiting(f"th-{n}", f"a{n}@b.com", 5 + n) for n in range(22)]
+    monkeypatch.setattr(gmail, "inbox_counts", lambda db_: counts())
+    monkeypatch.setattr(gmail, "waiting_for_you", lambda db_, me, days=3: [])
+    monkeypatch.setattr(gmail, "awaiting_reply", lambda db_, me, days=3: many)
+    monkeypatch.setattr(reminders, "_digest_hour", lambda: 7)
+
+    out = reminders.send_mail_digest(db, at_seven())
+    # סיכום אחד, ולא יותר מהתקרה של ההתראות
+    assert out <= 1 + gmail.ALERT_PER_RUN
+    assert gmail.ALERT_PER_RUN <= 6
+
+
+def test_an_old_thread_is_history_and_not_an_alert():
+    """⚠️ שרשור בן חודש שאיש לא ענה בו אינו חדשות. מול התיבה נמצאו
+    כאלה בני 27 ימים."""
+    assert gmail.ALERT_MAX_DAYS <= 30
+    assert gmail.ALERT_MAX_DAYS > gmail.ALERT_DAYS
+
+
+def test_an_alert_without_a_name_still_reads_well(db):
+    """מול התיבה היה שרשור אחד שבו לא נמצאה כתובת לצד השני."""
+    from app.bot import reminders
+
+    text = reminders.alert_text(gmail.Waiting(thread_id="t", who="", days=4), "silent")
+    assert "מישהו" in text
+    assert "4" in text
+
+
+def test_the_count_does_not_use_googles_estimate(db, connected, monkeypatch):
+    """⚠️⚠️ ``resultSizeEstimate`` החזיר 201 לשלוש שאילתות שונות מול
+    התיבה האמיתית, כולל "היום". סיכום שכולו מספרים חייב מספרים נכונים.
+    """
+    seen = []
+
+    def spy(db_, query, limit):
+        seen.append(query)
+        return ["a", "b", "c"]
+
+    monkeypatch.setattr(gmail, "_message_ids", spy)
+    monkeypatch.setattr(
+        gmail, "_get", lambda *a, **k: pytest.fail("אין להשתמש ב-resultSizeEstimate")
+    )
+    result = gmail.inbox_counts(db)
+    assert result.week == 3
+    assert len(seen) == 3

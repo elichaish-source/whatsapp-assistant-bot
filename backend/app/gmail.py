@@ -1545,6 +1545,15 @@ ALERT_SCAN = 40
 # מעל כמה ימים נחשב "מחכה". ⚠️ שלושה, לשני הכיוונים — הוכרע 23.11.2026
 # ושינה את מה שנקבע ב-17.11 (יומיים לכיוון אחד, ארבעה לשני)
 ALERT_DAYS = 3
+# מעבר לזה כבר לא חדשות. שרשור בן חודש שאיש לא ענה בו אינו התראה
+# אלא היסטוריה, והתראה עליו היא רעש
+ALERT_MAX_DAYS = 21
+# כמה התראות יוצאות בסבב אחד. ⚠️ **תקרה ולא "הכול":** מול התיבה
+# האמיתית נמצאו 22 שרשורים שאיש לא ענה בהם, וכולם היו יוצאים ברצף
+# כ-22 הודעות וואטסאפ. מי שמקבל 22 התראות קורא אפס מהן
+ALERT_PER_RUN = 5
+# תקרת הספירה לסיכום. מעבר לזה המספר מוצג כ"יותר מ-"
+COUNT_CAP = 500
 
 
 @dataclass
@@ -1556,14 +1565,17 @@ class Waiting:
     days: int
 
 
-def _thread_tail(db: Session, thread_id: str) -> tuple[str, datetime] | None:
+def _thread_tail(token: str, thread_id: str) -> tuple[str, datetime] | None:
     """השולח והזמן של ההודעה האחרונה בשרשור.
 
-    ‏``format=metadata`` עם שתי כותרות בלבד: מי שלח ומתי. הגוף אינו
-    נשלף, ולכן גם לא עובר.
+    ‏``format=metadata`` עם כותרת אחת בלבד: מי שלח. הגוף אינו נשלף,
+    ולכן גם לא עובר.
+
+    ⚠️ **מקבלת טוקן ולא ``Session``**, כי היא נקראת מכמה תהליכונים
+    ו-``Session`` של SQLAlchemy אינו בטוח לשימוש מקביל.
     """
-    data = _get(
-        db,
+    data = _request(
+        token,
         f"threads/{thread_id}",
         {"format": "metadata", "metadataHeaders": ["From"]},
     )
@@ -1582,35 +1594,44 @@ def _scan(db: Session, query: str, me: str, mine_last: bool, days: int) -> list[
     ואיש לא ענה; ``False`` — הם כתבו אחרון ואני לא עניתי.
     """
     me = me.strip().lower()
-    cutoff = datetime.now(tz=local_tz()) - timedelta(days=days)
-    data = _get(db, "threads", {"q": query, "maxResults": ALERT_SCAN})
+    right_now = datetime.now(tz=local_tz())
+    newest = right_now - timedelta(days=days)
+    oldest = right_now - timedelta(days=ALERT_MAX_DAYS)
+    token = gauth.access_token(db)
+    data = _request(token, "threads", {"q": query, "maxResults": ALERT_SCAN})
+    ids = [str(item.get("id") or "") for item in data.get("threads") or [] if item.get("id")]
+    if not ids:
+        return []
 
-    found = []
-    for item in data.get("threads") or []:
-        thread_id = str(item.get("id") or "")
-        if not thread_id:
-            continue
+    # ⚠️ במקביל: סדרתית זה קריאת רשת לכל שרשור, ומול התיבה האמיתית
+    # הסריקה ארכה 24 שניות על 40 שרשורים
+    def one(thread_id: str):
         try:
-            tail = _thread_tail(db, thread_id)
+            return thread_id, _thread_tail(token, thread_id)
         except GmailError as exc:
             log.warning("דילוג על שרשור %s: %s", thread_id, exc)
-            continue
+            return thread_id, None
+
+    with ThreadPoolExecutor(max_workers=min(SUMMARY_WORKERS, len(ids))) as pool:
+        tails = list(pool.map(one, ids))
+
+    found = []
+    for thread_id, tail in tails:
         if tail is None:
             continue
         sender, when = tail
         if (sender == me) != mine_last:
             continue
-        if when > cutoff:
+        # ⚠️ חלון ולא "הכול": שרשור בן חודש אינו התראה אלא היסטוריה
+        if when > newest or when < oldest:
             continue
+        who = sender if not mine_last else _thread_other(db, thread_id, me)
         found.append(
-            Waiting(
-                thread_id=thread_id,
-                # ⚠️ כשאני כתבתי אחרון, "מי" הוא מי שלא ענה — ואותו
-                # אפשר לדעת רק מהנמען, ולכן נשלף מהשרשור עצמו
-                who=sender if not mine_last else _thread_other(db, thread_id, me),
-                days=max(1, (datetime.now(tz=local_tz()) - when).days),
-            )
+            Waiting(thread_id=thread_id, who=who, days=max(1, (right_now - when).days))
         )
+
+    # ⚠️ הישנים קודם: מי שמחכה הכי הרבה הוא מי שהכי דחוף
+    found.sort(key=lambda item: item.days, reverse=True)
     return found
 
 
@@ -1664,12 +1685,16 @@ def inbox_counts(db: Session) -> InboxCounts:
     """
 
     def count(query: str) -> int:
+        # ⚠️⚠️ **ספירת מזהים ולא ``resultSizeEstimate``.** ההערכה של
+        # גוגל גסה ומתעלמת מהמסננים: מול התיבה האמיתית היא החזירה 201
+        # לשלוש שאילתות שונות, כולל "היום". סיכום שכולו מספרים חייב
+        # מספרים נכונים, אחרת הוא גרוע מכלום.
+        # המזהים בלבד חוזרים כאן, בלי שום תוכן
         try:
-            data = _get(db, "messages", {"q": query, "maxResults": 1})
+            return len(_message_ids(db, query, COUNT_CAP))
         except GmailError as exc:
             log.warning("ספירה נכשלה: %s", exc)
             return 0
-        return int(data.get("resultSizeEstimate") or 0)
 
     week = count(f"in:inbox -in:chats after:{_midnight(7)}")
     today_query = f"in:inbox -in:chats after:{_midnight(0)}"
