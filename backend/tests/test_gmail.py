@@ -1285,13 +1285,13 @@ def sent_mime(calls):
     return message_from_bytes(b64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
 
 
-def test_the_reply_goes_to_the_original_sender(db, connected, original, posted):
+def test_the_reply_goes_to_the_original_sender(db, original, posted):
     """⚠️⚠️ הנמען נגזר מהמייל המקורי ולא מהלקוח."""
     gmail.send_reply(db, "gid-1", "בסדר גמור")
     assert sent_mime(posted)["To"] == "dani@example.com"
 
 
-def test_the_reply_stays_in_the_original_thread(db, connected, original, posted):
+def test_the_reply_stays_in_the_original_thread(db, original, posted):
     """⚠️ בלי In-Reply-To ו-References ו-threadId, הנמען רואה מייל
     מנותק מההתכתבות."""
     gmail.send_reply(db, "gid-1", "בסדר גמור")
@@ -1305,7 +1305,7 @@ def test_the_reply_stays_in_the_original_thread(db, connected, original, posted)
     assert "<abc@mail.example>" in mime["References"]
 
 
-def test_the_subject_gets_one_re_and_not_two(db, connected, posted, monkeypatch):
+def test_the_subject_gets_one_re_and_not_two(db, posted, monkeypatch):
     monkeypatch.setattr(
         gmail,
         "_get",
@@ -1323,26 +1323,26 @@ def test_the_subject_gets_one_re_and_not_two(db, connected, posted, monkeypatch)
     assert sent_mime(posted)["Subject"] == "Re: כבר תשובה"
 
 
-def test_a_hebrew_body_survives_the_encoding(db, connected, original, posted):
+def test_a_hebrew_body_survives_the_encoding(db, original, posted):
     gmail.send_reply(db, "gid-1", "שלום דני, מאשר את ההצעה.")
     body = sent_mime(posted).get_content()
     assert "שלום דני, מאשר את ההצעה." in body
 
 
-def test_the_sender_is_left_to_google(db, connected, original, posted):
+def test_the_sender_is_left_to_google(db, original, posted):
     """⚠️ כתיבת From ידנית הייתה פתח לזיוף שולח."""
     gmail.send_reply(db, "gid-1", "טקסט")
     assert sent_mime(posted)["From"] is None
 
 
-def test_an_empty_body_is_never_sent(db, connected, original, posted):
+def test_an_empty_body_is_never_sent(db, original, posted):
     """⚠️ שליחה בטעות של מייל ריק היא שליחה שאי אפשר לבטל."""
     with pytest.raises(gmail.GmailError):
         gmail.send_reply(db, "gid-1", "   ")
     assert posted == []
 
 
-def test_a_mail_without_a_sender_is_not_answered(db, connected, posted, monkeypatch):
+def test_a_mail_without_a_sender_is_not_answered(db, posted, monkeypatch):
     monkeypatch.setattr(
         gmail,
         "_get",
