@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { formatWhen } from "../format";
 import type { ReplyDraft, ReplySent } from "../types";
 
 /**
@@ -77,6 +78,11 @@ export default function ReplyBox({
         <span>אל: {draft.to}</span>
         <span>{draft.subject}</span>
       </div>
+
+      {draft.prepared_at && (
+        /* ⚠️ ההצעות נוסחו לפני כמה שעות. המשתמש צריך לדעת מה הוא קורא */
+        <p className="muted">ההצעות הוכנו ב-{formatWhen(draft.prepared_at)}.</p>
+      )}
 
       {draft.options.length > 0 ? (
         <div className="reply-options">

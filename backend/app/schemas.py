@@ -297,6 +297,9 @@ class EmailItemOut(BaseModel):
     is_client: bool = False
     unread: bool = False
     has_attachments: bool = False
+    # ⚠️ מחכה לתשובה בכתב. שונה מ-important: חשבונית חשובה, אבל עונים
+    # עליה בתשלום ולא במילים. זה גם מי שמקבל טיוטת מענה מוכנה מראש
+    needs_reply: bool = False
     # כמה הודעות יש בשרשור שהשורה מייצגת. ⚠️ מוצג למשתמש, כדי ששורה
     # שמאחוריה שתי הודעות לא תיראה כאילו אחת מהן נעלמה
     thread_count: int = 1
@@ -376,6 +379,9 @@ class ReplyDraftOut(BaseModel):
     to: str
     subject: str
     options: list[ReplyOptionOut] = []
+    # ⚠️ מתי ההצעות הוכנו, כשהוכנו מראש. ריק = נוסחו עכשיו. מוצג
+    # למשתמש, כדי שידע שהוא קורא טקסט שנכתב לפני כמה שעות
+    prepared_at: datetime | None = None
 
 
 class ReplyIn(BaseModel):

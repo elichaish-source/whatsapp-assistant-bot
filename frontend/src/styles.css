@@ -861,3 +861,9 @@ pre {
 .reply-confirm {
   border-color: var(--primary);
 }
+
+/* ⚠️ "דורש מענה" אינו "חשוב": חשבונית חשובה, אבל עונים עליה בתשלום */
+.pill.needs-reply {
+  background: var(--selected);
+  font-weight: 600;
+}

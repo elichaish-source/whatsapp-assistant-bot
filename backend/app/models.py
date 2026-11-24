@@ -357,5 +357,11 @@ class GoogleCredential(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="connected", nullable=False)
     last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # ⚠️⚠️ מתי הוכנו טיוטות בפעם האחרונה. **זה מה שמונע התחדשות
+    # בלולאה:** מטמון הטיוטות חי בזיכרון, ולכן הפעלה מחדש מוחקת אותו,
+    # ובלי חותמת במסד הסבב הבא היה מכין מחדש טיוטה לכל מייל שעדיין
+    # בדואר הנכנס — ועל מענה זה מודל יקר. ⚠️ זמנים בלבד, לא תוכן
+    last_prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reply_prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # מתי יצאה ההודעה על הניתוק. קיים כדי שלא תצא שוב בכל סבב של הלולאה
     disconnected_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -70,6 +70,12 @@ export default function MailRow({
                 לקוח
               </span>
             )}
+            {/* ⚠️ מחכה לתשובה בכתב, ולא סתם חשוב */}
+            {item.needs_reply && (
+              <span className="pill needs-reply" title="מחכה לתשובה בכתב">
+                דורש מענה
+              </span>
+            )}
           </span>
           <span className="muted mail-when">
             {item.has_attachments && (

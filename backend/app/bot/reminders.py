@@ -156,6 +156,11 @@ def _tick() -> None:
         except Exception:  # noqa: BLE001 - חימום הוא נוחות, לא תלות
             log.exception("חימום מסך המיילים נכשל")
             db.rollback()
+        try:
+            prepare_drafts(db)
+        except Exception:  # noqa: BLE001 - הכנה היא נוחות, לא תלות
+            log.exception("הכנת הטיוטות נכשלה")
+            db.rollback()
     finally:
         db.close()
 
@@ -223,3 +228,90 @@ def watch_google(db: Session, moment: datetime | None = None) -> bool:
     """
     cred = gauth.check(db, moment or now())
     return bool(cred) and gauth.announce_disconnect(db, cred)
+
+
+# --- הכנת טיוטות מראש (הוכרע 24.11.2026) ---
+
+
+def _prepare_hours() -> set[int]:
+    """השעות שבהן מוכנות טיוטות מענה, מתוך ההגדרות."""
+    found = set()
+    for part in get_settings().reply_prepare_hours.split(","):
+        part = part.strip()
+        if part.isdigit() and 0 <= int(part) <= 23:
+            found.add(int(part))
+    return found
+
+
+def _newer_than(rows, since: datetime | None):
+    """המיילים שהגיעו אחרי החותמת. ⚠️ זה מה שמונע הכנה מחדש."""
+    if since is None:
+        return list(rows)
+    return [item for item in rows if item.received_at > aware(since)]
+
+
+def prepare_drafts(db: Session, moment: datetime | None = None) -> tuple[int, int]:
+    """מכין מראש טיוטת משימה לכל מייל חדש, וטיוטות מענה בשעות שנקבעו.
+
+    ⚠️⚠️ **"טיוטה אחת לכל מייל, אי פעם" — זה מה שמגביל את העלות.**
+    מוכנות טיוטות רק למיילים שהגיעו אחרי החותמת שבמסד, והחותמת מתקדמת
+    בסוף כל סבב. הפעלה מחדש מוחקת את המטמון שבזיכרון אך לא את החותמת,
+    ולכן **אינה גוררת הכנה מחדש** — מייל ישן חוזר ללחיצה ידנית.
+
+    ⚠️ **המענה יקר בהרבה מהמשימה** (‏Opus עם גוף המייל מול Haiku, פי
+    חמישים), ולכן הוא מוכן רק בשעות שנקבעו ורק למה שסומן ``needs_reply``.
+
+    ⚠️ **זו נוחות ולא תלות:** כשאין טיוטה מוכנה, הלחיצה מכינה אותה בזמן
+    אמת בדיוק כמו קודם.
+
+    מחזיר (טיוטות משימה שהוכנו, טיוטות מענה שהוכנו).
+    """
+    moment = moment or now()
+    cred = gauth.get_credential(db)
+    if cred is None or cred.status != "connected":
+        return 0, 0
+
+    rows = gmail.list_screen(db, reminders_scope())
+    if not rows:
+        return 0, 0
+    triaged = gmail.triage(rows, gmail.client_addresses(db))
+
+    tasks_made = 0
+    for item in _newer_than([t.email for t in triaged if t.relevant], cred.last_prepared_at):
+        if gmail.prepared_for(item.id) and gmail.prepared_for(item.id).task:
+            continue
+        try:
+            mail = gmail.fetch_full(db, item.id)
+            gmail.remember_prepared(item.id, moment, task=gmail.task_draft(mail))
+            tasks_made += 1
+        except Exception:  # noqa: BLE001 - הכנה היא נוחות
+            log.warning("הכנת טיוטת משימה ל-%s נכשלה", item.id)
+    cred.last_prepared_at = moment
+
+    replies_made = 0
+    if moment.astimezone(gmail.local_tz()).hour in _prepare_hours():
+        wanted = [t.email for t in triaged if t.needs_reply]
+        block = memory.build_block(db)
+        for item in _newer_than(wanted, cred.last_reply_prepared_at):
+            ready = gmail.prepared_for(item.id)
+            if ready and ready.replies:
+                continue
+            try:
+                mail = gmail.fetch_full(db, item.id)
+                options = gmail.reply_suggestions(mail, block)
+                if options:
+                    gmail.remember_prepared(item.id, moment, replies=options)
+                    replies_made += 1
+            except Exception:  # noqa: BLE001 - הכנה היא נוחות
+                log.warning("הכנת טיוטת מענה ל-%s נכשלה", item.id)
+        cred.last_reply_prepared_at = moment
+
+    db.commit()
+    if tasks_made or replies_made:
+        log.info("הוכנו מראש: %d משימות, %d מענים", tasks_made, replies_made)
+    return tasks_made, replies_made
+
+
+def reminders_scope() -> str:
+    """החלון שמכינים עליו. זהה לזה שהמסך נפתח עליו."""
+    return WARM_SCOPE
