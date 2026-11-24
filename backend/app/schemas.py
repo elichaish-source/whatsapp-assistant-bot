@@ -358,3 +358,36 @@ class TaskDraftOut(BaseModel):
     client_id: int | None = None
     notes: str = ""
     email_message_id: str = ""
+
+
+class ReplyOptionOut(BaseModel):
+    """הצעת ניסוח. ⚠️ **אינה נשלחת** — המשתמש עורך, מאשר ושולח."""
+
+    label: str = ""
+    text: str
+
+
+class ReplyDraftOut(BaseModel):
+    """מה שהמסך צריך כדי להציע תשובה: לאן היא תצא, ומה אפשר לכתוב.
+
+    ⚠️ **הנמען נגזר בשרת מהמייל המקורי**, והמסך רק מציג אותו.
+    """
+
+    to: str
+    subject: str
+    options: list[ReplyOptionOut] = []
+
+
+class ReplyIn(BaseModel):
+    """גוף התשובה. ⚠️ **הנמען אינו כאן בכוונה** — הוא נקרא בשרת מהמייל
+    המקורי, אחרת היה אפשר לגרום למסך לשלוח לכל כתובת."""
+
+    body: str = Field(min_length=1, max_length=20000)
+
+
+class ReplySentOut(BaseModel):
+    """מה יצא ולאן, כדי שהמסך יאמר למשתמש בדיוק מה קרה."""
+
+    to: str
+    subject: str
+    archived: bool = False
