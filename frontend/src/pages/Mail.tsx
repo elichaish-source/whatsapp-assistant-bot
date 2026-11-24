@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ApiError, api, query } from "../api";
 import MailRow from "../components/MailRow";
 import Modal from "../components/Modal";
+import ReplyBox from "../components/ReplyBox";
 import TaskForm from "../components/TaskForm";
 import { formatWhen } from "../format";
 import { linkify } from "../linkify";
@@ -12,6 +13,8 @@ import {
   type MailItem,
   type MailList,
   type MailScope,
+  type ReplyDraft,
+  type ReplySent,
   type TaskDraft,
 } from "../types";
 
@@ -36,6 +39,9 @@ export default function Mail() {
   const [busy, setBusy] = useState<string | null>(null);
   // הטיוטה שממתינה לאישור בטופס. ⚠️ עד "שמור" לא נוצר כלום
   const [drafting, setDrafting] = useState<{ item: MailItem; draft: TaskDraft } | null>(null);
+  // תיבת המענה הפתוחה, והודעה אחרי שליחה. ⚠️ לשליחה אין ביטול
+  const [replying, setReplying] = useState<{ item: MailItem; draft: ReplyDraft } | null>(null);
+  const [sentNote, setSentNote] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -133,6 +139,37 @@ export default function Mail() {
   };
 
   /**
+   * "מענה": שואל מהשרת הצעות ניסוח ופותח את תיבת הכתיבה.
+   * ⚠️ אינו שולח כלום — השליחה היא צעד נפרד, עם אישור.
+   */
+  const reply = async (item: MailItem) => {
+    setBusy(item.id);
+    setError("");
+    try {
+      const d = await api<ReplyDraft>(`/emails/${encodeURIComponent(item.id)}/reply-draft`);
+      setReplying({ item, draft: d });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** אחרי שליחה. ⚠️ אין כאן "בטל" — המייל כבר יצא */
+  const afterSent = (item: MailItem, sent: ReplySent) => {
+    setReplying(null);
+    closeRead();
+    drop(item, true);
+    setSentNote(
+      sent.archived
+        ? `התשובה נשלחה אל ${sent.to}, והמייל עבר לארכיון.`
+        : `התשובה נשלחה אל ${sent.to}. ⚠️ הארכוב נכשל, והמייל נשאר בדואר הנכנס.`,
+    );
+    // הארכוב נעשה בשרת, ולכן הרשימה מתרעננת כדי לשקף את המצב האמיתי
+    if (!sent.archived) load();
+  };
+
+  /**
    * "הפוך למשימה": שואל מהשרת הצעה, ופותח את טופס המשימה הקיים מלא
    * מראש. ⚠️ **לא נוצר כלום עד שלוחצים "שמור"** — הפיכת מייל למשימה
    * כמעט תמיד דורשת עריכה, וזה היתרון של המסך על הבוט.
@@ -217,6 +254,16 @@ export default function Mail() {
           </button>
         ))}
       </div>
+
+      {/* ⚠️ הודעה אחרי שליחה, ובלי כפתור "בטל": המייל כבר יצא */}
+      {sentNote && (
+        <div className="card mail-undo">
+          <span>{sentNote}</span>
+          <button className="link-btn" onClick={() => setSentNote("")}>
+            סגור
+          </button>
+        </div>
+      )}
 
       {/* הביטול יושב מעל הרשימה ולא נעלם מעצמו: מי שארכב בטעות צריך
           למצוא אותו, ולא להספיק ללחוץ בתוך חמש שניות */}
@@ -315,6 +362,13 @@ export default function Mail() {
                 <button disabled={busy === opening.id} onClick={() => toTask(opening)}>
                   {busy === opening.id ? "מכין…" : "הפוך למשימה"}
                 </button>
+                <button
+                  className="primary"
+                  disabled={busy === opening.id}
+                  onClick={() => reply(opening)}
+                >
+                  {busy === opening.id ? "מכין…" : "מענה"}
+                </button>
               </div>
             </div>
           )}
@@ -340,6 +394,19 @@ export default function Mail() {
               await archive([item]);
             }}
             onCancel={() => setDrafting(null)}
+          />
+        </Modal>
+      )}
+
+      {/* ⚠️ השליחה היא הפעולה היחידה במסך שאי אפשר לבטל, ולכן יש בה
+          מסך אישור שמציג את הנמען ואת הטקסט המלא לפני שהיא יוצאת */}
+      {replying && (
+        <Modal title="תשובה למייל" onClose={() => setReplying(null)}>
+          <ReplyBox
+            messageId={replying.item.id}
+            draft={replying.draft}
+            onSent={(sent) => afterSent(replying.item, sent)}
+            onCancel={() => setReplying(null)}
           />
         </Modal>
       )}

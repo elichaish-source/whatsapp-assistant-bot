@@ -818,3 +818,42 @@ pre {
     display: none;
   }
 }
+
+/* --- מענה ושליחה --- */
+
+.reply {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reply-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* כל הצעה היא כפתור שממלא את תיבת הכתיבה. הטקסט מקוצר, כי הבחירה
+   נעשית לפי התווית ולא לפי קריאה מלאה */
+.reply-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: start;
+  padding: 8px 10px;
+}
+
+.reply-text {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* ⚠️ מסך האישור שלפני השליחה. מסגרת בצבע הראשי, כדי שיהיה ברור
+   שזה לא עוד שלב בעריכה אלא הרגע שאחריו אין חזרה */
+.reply-confirm {
+  border-color: var(--primary);
+}

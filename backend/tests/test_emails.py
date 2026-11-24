@@ -748,3 +748,103 @@ def test_a_gmail_failure_during_the_draft_is_a_502(client, connected, monkeypatc
 def test_the_draft_requires_a_login(anon, connected, monkeypatch, drafted):
     monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
     assert anon.get("/api/emails/gid-1/task-draft").status_code == 401
+
+
+# --- נתיבי המענה (שלב 4-4) ---
+
+
+@pytest.fixture
+def no_send(monkeypatch):
+    """⚠️ שום בדיקה אינה שולחת מייל. תופס את השליחה ומדווח מה יצא."""
+    calls = []
+
+    def spy(db_, mid, body):
+        calls.append((mid, body))
+        return gmail.ReplyTarget(to="dani@example.com", subject="Re: נושא", thread_id="th-1")
+
+    monkeypatch.setattr(gmail, "send_reply", spy)
+    return calls
+
+
+def test_the_draft_says_where_the_reply_will_go(client, connected, monkeypatch):
+    monkeypatch.setattr(
+        gmail,
+        "reply_target",
+        lambda db_, mid: gmail.ReplyTarget(to="dani@example.com", subject="Re: נושא", thread_id="t"),
+    )
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    monkeypatch.setattr(
+        gmail,
+        "reply_suggestions",
+        lambda mail, block="": [gmail.ReplyOption(label="מאשר", text="בסדר גמור")],
+    )
+    body = client.get("/api/emails/gid-1/reply-draft").json()
+    assert body["to"] == "dani@example.com"
+    assert body["options"][0]["label"] == "מאשר"
+
+
+def test_asking_for_a_draft_sends_nothing(client, connected, monkeypatch, no_send):
+    """⚠️⚠️ הכנת תשובה אינה שליחה."""
+    monkeypatch.setattr(
+        gmail,
+        "reply_target",
+        lambda db_, mid: gmail.ReplyTarget(to="a@b.com", subject="Re: x", thread_id="t"),
+    )
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    monkeypatch.setattr(gmail, "reply_suggestions", lambda mail, block="": [])
+    assert client.get("/api/emails/gid-1/reply-draft").status_code == 200
+    assert no_send == []
+
+
+def test_sending_passes_only_the_body_and_the_mail_id(client, connected, no_send, modified):
+    """⚠️⚠️ הנמען אינו מגיע מהלקוח — הוא נקרא בשרת מהמייל המקורי."""
+    response = client.post("/api/emails/gid-1/reply", json={"body": "בסדר גמור"})
+    assert response.status_code == 200
+    assert no_send == [("gid-1", "בסדר גמור")]
+    assert response.json()["to"] == "dani@example.com"
+
+
+def test_an_empty_reply_is_rejected_before_it_reaches_google(client, connected, no_send):
+    assert client.post("/api/emails/gid-1/reply", json={"body": ""}).status_code == 422
+    assert no_send == []
+
+
+def test_the_mail_is_archived_after_a_successful_send(client, connected, no_send, modified):
+    assert client.post("/api/emails/gid-1/reply", json={"body": "טקסט"}).json()["archived"] is True
+    assert modified == [(["gid-1"], {"removeLabelIds": ["INBOX"]})]
+
+
+def test_a_failed_archive_does_not_fail_the_send(client, connected, no_send, monkeypatch):
+    """⚠️⚠️ המייל כבר יצא ואי אפשר להחזיר אותו. התשובה מדווחת שהארכוב
+    נכשל, והמסך אומר את זה — אבל השליחה הצליחה."""
+
+    def boom(*a, **k):
+        raise gmail.GmailError("רשת")
+
+    monkeypatch.setattr(gmail, "archive", boom)
+    body = client.post("/api/emails/gid-1/reply", json={"body": "טקסט"}).json()
+    assert body["archived"] is False
+    assert body["to"] == "dani@example.com"
+    assert no_send != []
+
+
+def test_a_failed_send_is_a_502_and_archives_nothing(client, connected, monkeypatch, modified):
+    def boom(*a, **k):
+        raise gmail.GmailError("גוגל החזירה 500")
+
+    monkeypatch.setattr(gmail, "send_reply", boom)
+    assert client.post("/api/emails/gid-1/reply", json={"body": "טקסט"}).status_code == 502
+    # ⚠️ לא נשלח, ולכן גם לא מארכבים
+    assert modified == []
+
+
+def test_replying_without_a_connection_says_to_connect(client, no_send):
+    response = client.post("/api/emails/gid-1/reply", json={"body": "טקסט"})
+    assert response.status_code == 503
+    assert no_send == []
+
+
+def test_replying_requires_a_login(anon, connected, no_send):
+    assert anon.post("/api/emails/gid-1/reply", json={"body": "טקסט"}).status_code == 401
+    assert anon.get("/api/emails/gid-1/reply-draft").status_code == 401
+    assert no_send == []

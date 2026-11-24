@@ -218,3 +218,23 @@ export interface TaskDraft {
   notes: string;
   email_message_id: string;
 }
+
+/** הצעת ניסוח לתשובה. ⚠️ אינה נשלחת — המשתמש עורך, מאשר ושולח */
+export interface ReplyOption {
+  label: string;
+  text: string;
+}
+
+export interface ReplyDraft {
+  // ⚠️ נגזר בשרת מהמייל המקורי, ואינו ניתן לעריכה במסך
+  to: string;
+  subject: string;
+  options: ReplyOption[];
+}
+
+export interface ReplySent {
+  to: string;
+  subject: string;
+  // ⚠️ השליחה הצליחה גם אם זה false. את המייל אי אפשר להחזיר
+  archived: boolean;
+}

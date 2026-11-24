@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import gauth, gmail
+from .. import gauth, gmail, memory
 from ..auth import require_user
 from ..db import get_db
 from ..models import Client
@@ -33,6 +33,10 @@ from ..schemas import (
     EmailIdsOut,
     EmailItemOut,
     EmailListOut,
+    ReplyDraftOut,
+    ReplyIn,
+    ReplyOptionOut,
+    ReplySentOut,
     TaskDraftOut,
 )
 
@@ -154,6 +158,64 @@ def _write(db: Session, action, ids: list[str]) -> list[str]:
     except (gmail.GmailError, gauth.GoogleError) as exc:
         log.warning("שינוי תוויות נכשל: %s", exc)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+
+
+@router.get("/{message_id}/reply-draft", response_model=ReplyDraftOut)
+def reply_draft(message_id: str, db: Session = Depends(get_db)) -> ReplyDraftOut:
+    """הצעות ניסוח לתשובה, ולאן היא תצא (שלב 4-4).
+
+    ⚠️ **אינה שולחת כלום.** המשתמש עורך, מאשר ושולח בנפרד.
+
+    ⚠️ **ההצעות נוצרות בלחיצה ולא מראש** — זה החלק היקר, ורוב המיילים
+    לא יענו להם.
+    """
+    _require_connection(db)
+    try:
+        target = gmail.reply_target(db, message_id)
+        mail = gmail.fetch_full(db, message_id)
+    except gauth.GoogleDisconnected as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DISCONNECTED) from exc
+    except (gmail.GmailError, gauth.GoogleError) as exc:
+        log.warning("הכנת תשובה נכשלה: %s", exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+
+    options = gmail.reply_suggestions(mail, memory.build_block(db))
+    return ReplyDraftOut(
+        to=target.to,
+        subject=target.subject,
+        options=[ReplyOptionOut(label=item.label, text=item.text) for item in options],
+    )
+
+
+@router.post("/{message_id}/reply", response_model=ReplySentOut)
+def send_reply(message_id: str, payload: ReplyIn, db: Session = Depends(get_db)) -> ReplySentOut:
+    """שולח את התשובה, ומארכב את השרשור אחריה (שלב 4-4).
+
+    ⚠️⚠️ **זו הפעולה היחידה במסך שאי אפשר לבטל.** המסך מציג אישור עם
+    הנמען והטקסט לפני שהוא מגיע לכאן, ואין "בטל" אחריה.
+
+    ⚠️ **הנמען נקרא מהמייל המקורי ואינו מגיע מהלקוח** — ``ReplyIn``
+    מכיל את גוף התשובה בלבד.
+
+    ⚠️ **כישלון הארכוב אינו כישלון השליחה.** המייל כבר יצא, ואי אפשר
+    להחזיר אותו; התשובה מדווחת ``archived=false`` והמסך אומר את זה.
+    """
+    _require_connection(db)
+    try:
+        target = gmail.send_reply(db, message_id, payload.body)
+    except gauth.GoogleDisconnected as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DISCONNECTED) from exc
+    except (gmail.GmailError, gauth.GoogleError) as exc:
+        log.warning("שליחת התשובה נכשלה: %s", exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+
+    archived = False
+    try:
+        archived = bool(gmail.archive(db, [message_id]))
+    except (gmail.GmailError, gauth.GoogleError, gauth.GoogleDisconnected) as exc:
+        # ⚠️ נבלע בכוונה: המייל נשלח, וזה מה שחשוב
+        log.warning("הארכוב אחרי שליחה נכשל: %s", exc)
+    return ReplySentOut(to=target.to, subject=target.subject, archived=archived)
 
 
 @router.get("/{message_id}/task-draft", response_model=TaskDraftOut)
