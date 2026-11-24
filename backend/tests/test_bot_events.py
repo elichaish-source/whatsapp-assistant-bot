@@ -276,3 +276,24 @@ def test_the_day_names_are_hebrew_and_aligned_with_weekday():
     assert events.day_name(date(2026, 11, 23)) == "שני"
     assert events.day_name(date(2026, 11, 28)) == "שבת"
     assert events.day_name(date(2026, 11, 29)) == "ראשון"
+
+
+def test_an_event_from_another_calendar_is_marked(db, connected, monkeypatch):
+    """⚠️ נחוץ בגלל ההכרעה לקרוא גם את היומן המשפחתי.
+
+    אירוע משפחתי שמופיע בלי סימון נראה כמו פגישת עבודה — "פגישה ב-20:00"
+    בלי לדעת מאיזה יומן היא הוא שאלה ולא תשובה. התגלה מול היומן האמיתי
+    ב-25.11.2026, כשהריצה החזירה שלושה יומנים ולא אחד.
+    """
+    family = event(20, "ארוחה")
+    family.calendar = "היומן המשפחתי"
+    family.from_primary = False
+    monkeypatch.setattr(gcal, "agenda", lambda session, scope: [family])
+    assert "(היומן המשפחתי)" in run(db).reply
+
+
+def test_an_event_from_the_primary_calendar_is_not_marked(db, connected, monkeypatch):
+    """על הראשי שם היומן היה רעש בכל שורה, ועוד כתובת מייל."""
+    monkeypatch.setattr(gcal, "agenda", lambda session, scope: [event(9, "פגישה")])
+    reply = run(db).reply
+    assert "(" not in reply

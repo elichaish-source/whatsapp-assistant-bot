@@ -80,6 +80,10 @@ class Event:
     id: str
     title: str
     calendar: str
+    # ⚠️ **האם האירוע מהיומן הראשי.** נחוץ כי ההכרעה של 24.11.2026 היא
+    # לקרוא גם את היומן המשפחתי — ואירוע משפחתי שמופיע בלי סימון נראה
+    # כמו פגישת עבודה. "פגישה ב-20:00" בלי הסימון הזה הוא שאלה, לא תשובה
+    from_primary: bool = True
     # ⚠️ אירוע של כל היום מגיע כ-``start.date`` ולא ``start.dateTime``, ואין
     # לו שעה בכלל. להמיר אותו ל-00:00 היה מציג "חופשה 00:00" בראש היום
     all_day: bool = False
@@ -189,7 +193,7 @@ def calendars(db: Session) -> list[Calendar]:
     return found
 
 
-def _parse(raw: dict, calendar_name: str) -> Event | None:
+def _parse(raw: dict, calendar_name: str, from_primary: bool = True) -> Event | None:
     """ממיר אירוע של גוגל ל-``Event``. מחזיר None למה שאין מה להציג בו."""
     start, end = raw.get("start") or {}, raw.get("end") or {}
     title = (raw.get("summary") or "").strip() or "(בלי כותרת)"
@@ -204,6 +208,7 @@ def _parse(raw: dict, calendar_name: str) -> Event | None:
         "id": raw.get("id") or "",
         "title": title,
         "calendar": calendar_name,
+        "from_primary": from_primary,
         "location": (raw.get("location") or "").strip(),
         "attendees": attendees,
     }
@@ -245,7 +250,7 @@ def _events(token: str, cal: Calendar, begins: datetime, ends: datetime) -> list
             "maxResults": PAGE,
         },
     )
-    found = [_parse(raw, cal.name) for raw in data.get("items") or []]
+    found = [_parse(raw, cal.name, cal.primary) for raw in data.get("items") or []]
     return [event for event in found if event is not None]
 
 

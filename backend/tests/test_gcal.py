@@ -362,3 +362,28 @@ def test_the_calendar_layer_calls_no_model(monkeypatch):
         text = handle.read()
     for marker in ("anthropic", "claude", "messages.create"):
         assert marker not in text.lower(), marker
+
+
+def test_an_event_knows_whether_its_calendar_is_the_primary_one(monkeypatch):
+    """הדגל נקבע מהיומן שממנו נשלף האירוע, ולא מניחוש לפי השם."""
+    seen: dict = {}
+
+    def capture(token, path, params=None):
+        seen["path"] = path
+        return {"items": [timed("2026-11-25T07:30:00Z")]}
+
+    monkeypatch.setattr(gcal, "_request", capture)
+    from_family = gcal._events(
+        "tok",
+        gcal.Calendar(id="family@group.calendar.google.com", name="משפחתי", primary=False),
+        datetime(2026, 11, 25, tzinfo=IL),
+        datetime(2026, 11, 26, tzinfo=IL),
+    )
+    assert from_family[0].from_primary is False
+    from_main = gcal._events(
+        "tok",
+        gcal.Calendar(id="me@gmail.com", name="ראשי", primary=True),
+        datetime(2026, 11, 25, tzinfo=IL),
+        datetime(2026, 11, 26, tzinfo=IL),
+    )
+    assert from_main[0].from_primary is True

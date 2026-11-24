@@ -98,8 +98,15 @@ def _with(event: gcal.Event) -> str:
 
 
 def _line(event: gcal.Event) -> str:
-    """שורה אחת לאירוע: שעה, כותרת, ואם יש — מקום ומשתתפים."""
+    """שורה אחת לאירוע: שעה, כותרת, ואם יש — יומן, מקום ומשתתפים.
+
+    ⚠️ **שם היומן מופיע רק כשהוא אינו הראשי.** זה נחוץ בגלל ההכרעה לקרוא
+    גם את היומן המשפחתי: "פגישה ב-20:00" בלי לדעת מאיזה יומן היא הוא
+    שאלה ולא תשובה. על הראשי זה היה רעש בכל שורה.
+    """
     line = f"{_clock(event)} · {event.title}"
+    if not event.from_primary:
+        line += f" ({event.calendar})"
     if event.location:
         line += f" · {event.location[:60]}"
     return line + _with(event)
