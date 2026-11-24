@@ -1226,3 +1226,14 @@ def test_the_gmail_link_opens_the_message_even_after_archiving():
     link = gmail.gmail_link("abc123")
     assert link.endswith("#all/abc123")
     assert "#inbox" not in link
+
+
+def test_the_draft_output_cap_is_generous():
+    """⚠️⚠️ 512 היו מעט מדי, וזה נתפס רק מול התיבה האמיתית: התשובה
+    נחתכה באמצע מחרוזת, והמשתמש קיבל את נושא המייל ככותרת המשימה —
+    בדיוק מה שהשלב נועד למנוע. הכשל היה שקט, כי הנפילה לאחור מוצלחת.
+
+    אותו לקח שכבר נרשם אחרי שהסינון נחתך ב-2048.
+    """
+    # כותרת עד 80 תווים ושורת הקשר, בעברית, הן כמה מאות טוקנים
+    assert gmail.DRAFT_TOKENS >= 1200
