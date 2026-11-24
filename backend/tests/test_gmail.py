@@ -1277,12 +1277,19 @@ def posted(monkeypatch):
 
 
 def sent_mime(calls):
-    """מפענח בחזרה את המייל שנשלח, כדי לבדוק מה באמת יצא."""
+    """מפענח בחזרה את המייל שנשלח, כדי לבדוק מה באמת יצא.
+
+    ⚠️ ``policy=default`` ולא ברירת המחדל הישנה: בלעדיו הכותרות חוזרות
+    מקודדות ב-RFC 2047 (``=?utf-8?b?...?=``) ו-``get_content`` אינו קיים.
+    נושא בעברית **אמור** לצאת מקודד — זו התנהגות נכונה של המייל, ולא
+    באג — ולכן הבדיקה מפענחת במקום לדרוש טקסט גולמי.
+    """
     import base64 as b64
     from email import message_from_bytes
+    from email.policy import default
 
     raw = calls[-1][1]["raw"]
-    return message_from_bytes(b64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    return message_from_bytes(b64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)), policy=default)
 
 
 def test_the_reply_goes_to_the_original_sender(db, original, posted):
