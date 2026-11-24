@@ -1117,3 +1117,67 @@ def test_the_triage_batch_is_small_enough_to_run_in_parallel():
     assert gmail.TRIAGE_BATCH <= 8
     # ומספיק מנות רצות יחד כדי שחלוקה תקצר באמת את ההמתנה
     assert gmail.TRIAGE_WORKERS >= 4
+
+
+# --- 🚨 הקישורים במיילים ---
+#
+# הבאג שנמצא 24.11.2026: השורה שמסירה תגיות מחקה את <a> יחד עם ה-href,
+# ולכן במייל HTML שכתוב בו "לחץ כאן" הכתובת לא הייתה קיימת בגוף בכלל.
+# רוב המיילים האמיתיים הם HTML, ולכן זה היה השורש.
+
+
+def test_the_link_address_survives_the_tag_stripping():
+    """🚨 הבאג עצמו: "לחץ כאן" איבד את הכתובת לגמרי."""
+    text = gmail._html_to_text('<p><a href="https://example.com/x">לחץ כאן</a></p>')
+    assert "https://example.com/x" in text
+    assert "לחץ כאן" in text
+
+
+def test_a_link_whose_text_is_the_address_is_not_doubled():
+    """⚠️ אחרת כל קישור במייל שיווקי היה מופיע פעמיים."""
+    text = gmail._html_to_text('<a href="https://example.com/x">https://example.com/x</a>')
+    assert text.count("https://example.com/x") == 1
+
+
+def test_a_javascript_link_keeps_only_its_text():
+    """⚠️⚠️ את הטקסט הזה כתב אדם אחר. רק http ו-https עוברים."""
+    text = gmail._html_to_text('<a href="javascript:alert(1)">לחץ כאן</a>')
+    assert "javascript" not in text.lower()
+    assert "לחץ כאן" in text
+
+
+def test_a_data_link_keeps_only_its_text():
+    text = gmail._html_to_text('<a href="data:text/html,<b>x</b>">הורדה</a>')
+    assert "data:" not in text
+    assert "הורדה" in text
+
+
+def test_a_mailto_link_keeps_only_its_text():
+    text = gmail._html_to_text('<a href="mailto:dani@example.com">דני</a>')
+    assert "דני" in text
+
+
+def test_several_links_all_survive():
+    html_body = (
+        '<a href="https://a.example/1">ראשון</a> ו<a href="https://b.example/2">שני</a>'
+    )
+    text = gmail._html_to_text(html_body)
+    assert "https://a.example/1" in text
+    assert "https://b.example/2" in text
+
+
+def test_an_escaped_ampersand_in_a_link_is_decoded():
+    """כתובות עם פרמטרים מגיעות עם &amp; בתוך ה-HTML."""
+    text = gmail._html_to_text('<a href="https://x.example/a?b=1&amp;c=2">כאן</a>')
+    assert "https://x.example/a?b=1&c=2" in text
+
+
+def test_a_link_with_markup_inside_it_keeps_its_text():
+    text = gmail._html_to_text('<a href="https://x.example/a"><b>מודגש</b></a>')
+    assert "מודגש" in text
+    assert "https://x.example/a" in text
+
+
+def test_plain_text_mails_are_untouched_by_the_link_handling():
+    """מייל טקסט אינו עובר ב-_html_to_text בכלל, אבל גם אם כן — בלי נזק."""
+    assert gmail._keep_links("שלום, ראה https://x.example/a") == "שלום, ראה https://x.example/a"

@@ -177,6 +177,9 @@ export interface MailItem {
   has_attachments: boolean;
   // כמה הודעות בשרשור שהשורה מייצגת. 1 = מייל בודד
   thread_count: number;
+  // ⚠️ כל ההודעות של השרשור שבדואר הנכנס. זה מה שנשלח לארכוב,
+  // ולא id לבדו — אחרת הודעה ישנה נשארת והשורה חוזרת ברענון
+  thread_ids: string[];
 }
 
 export interface MailList {

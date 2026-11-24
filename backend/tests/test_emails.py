@@ -483,30 +483,37 @@ def test_the_warmed_scope_is_the_one_the_screen_opens_on(db, connected, monkeypa
 def modified(monkeypatch):
     """תופס את מה שנשלח לגוגל, בלי לפנות אליה."""
     calls = []
-    monkeypatch.setattr(
-        gmail, "_modify", lambda db_, mid, payload: calls.append((mid, payload))
-    )
+
+    def spy(db_, ids, payload):
+        calls.append((list(ids), payload))
+        return list(ids)
+
+    monkeypatch.setattr(gmail, "_batch_modify", spy)
     return calls
 
 
-def test_archiving_removes_the_mail_from_the_inbox(client, connected, modified):
-    assert client.post("/api/emails/gid-1/archive").status_code == 200
-    assert modified == [("gid-1", {"removeLabelIds": ["INBOX"]})]
+def post_ids(client, path, ids):
+    return client.post(f"/api/emails/{path}", json={"ids": ids})
 
 
-def test_undo_puts_the_mail_back_in_the_inbox(client, connected, modified):
-    assert client.post("/api/emails/gid-1/unarchive").status_code == 200
-    assert modified == [("gid-1", {"addLabelIds": ["INBOX"]})]
+def test_archiving_removes_the_mails_from_the_inbox(client, connected, modified):
+    assert post_ids(client, "archive", ["gid-1"]).status_code == 200
+    assert modified == [(["gid-1"], {"removeLabelIds": ["INBOX"]})]
+
+
+def test_undo_puts_the_mails_back_in_the_inbox(client, connected, modified):
+    assert post_ids(client, "unarchive", ["gid-1"]).status_code == 200
+    assert modified == [(["gid-1"], {"addLabelIds": ["INBOX"]})]
 
 
 def test_archiving_never_deletes_anything(client, connected, modified):
     """⚠️⚠️ ההבטחה המרכזית של 4-4: ארכוב מזיז, ולא מוחק.
 
-    המייל נשאר בתיבה ונמצא בחיפוש, וזה מה שמצדיק כפתור שפועל מיד בלי
+    המייל נשאר בתיבה ונמצא בחיפוש, וזה מה שמצדיק פעולה שקורית מיד בלי
     שאלת אישור. אם מישהו יחליף את זה ב-trash או ב-delete, הבדיקה תיפול.
     """
-    client.post("/api/emails/gid-1/archive")
-    client.post("/api/emails/gid-1/unarchive")
+    post_ids(client, "archive", ["gid-1", "gid-2"])
+    post_ids(client, "unarchive", ["gid-1", "gid-2"])
     for _, payload in modified:
         touched = payload.get("removeLabelIds", []) + payload.get("addLabelIds", [])
         assert touched == ["INBOX"], "רק תווית הדואר הנכנס מותרת"
@@ -514,29 +521,103 @@ def test_archiving_never_deletes_anything(client, connected, modified):
         assert "SPAM" not in touched
 
 
-def test_the_archive_route_never_calls_a_delete_endpoint(db, connected, monkeypatch):
-    """⚠️ גם שכבת השירות עצמה: הכתיבה היחידה היא modify."""
+# --- 🚨 הבאג: ארכוב של שרשור, ולא של הודעה אחת ---
+
+
+def test_the_whole_thread_is_archived_and_not_just_the_newest(client, connected, monkeypatch, modified):
+    """🚨 הבאג שנמצא 24.11.2026 ותוקן כאן.
+
+    הרשימה מציגה שורה לכל שרשור. ארכוב ההודעה האחרונה בלבד השאיר את
+    הישנה עם INBOX, **והשורה חזרה ברענון הבא**. האימות מקצה לקצה לא
+    תפס את זה כי הוא רץ על מייל בודד.
+    """
+    row = mail(1)
+    row.thread_ids = ["gid-1", "gid-9"]
+    row.thread_count = 2
+    listed(monkeypatch, [row])
+    item = client.get("/api/emails").json()["items"][0]
+    assert item["thread_ids"] == ["gid-1", "gid-9"]
+
+    post_ids(client, "archive", item["thread_ids"])
+    assert modified == [(["gid-1", "gid-9"], {"removeLabelIds": ["INBOX"]})]
+
+
+def test_the_list_reports_every_inbox_message_of_the_thread(client, connected, monkeypatch):
+    """בלי זה המסך אינו יודע מה לשלוח לארכוב."""
+    first, second = mail(1), mail(2)
+    first.thread_id = second.thread_id = "th-same"
+    rows = gmail.collapse_threads([first, second])
+    listed(monkeypatch, rows)
+    item = client.get("/api/emails").json()["items"][0]
+    assert sorted(item["thread_ids"]) == ["gid-1", "gid-2"]
+    assert item["thread_count"] == 2
+
+
+def test_a_single_mail_still_reports_itself(client, connected, monkeypatch):
+    listed(monkeypatch, gmail.collapse_threads([mail(1)]))
+    assert client.get("/api/emails").json()["items"][0]["thread_ids"] == ["gid-1"]
+
+
+def test_undo_returns_exactly_what_was_archived(client, connected, modified):
+    """⚠️⚠️ ולא את כל השרשור: אחרת הביטול היה מחזיר לדואר הנכנס הודעה
+    שהייתה מארוכבת עוד קודם, והמשתמש היה מקבל בחזרה משהו שלא ארכב."""
+    archived = post_ids(client, "archive", ["gid-1", "gid-9"]).json()["ids"]
+    assert archived == ["gid-1", "gid-9"]
+    post_ids(client, "unarchive", archived)
+    assert modified[-1] == (["gid-1", "gid-9"], {"addLabelIds": ["INBOX"]})
+
+
+# --- ארכוב קבוצתי ---
+
+
+def test_many_mails_go_in_one_call(client, connected, modified):
+    """⚠️ אצווה ולא לולאה: קריאת רשת אחת, לא אחת לכל מייל."""
+    ids = [f"gid-{number}" for number in range(30)]
+    assert post_ids(client, "archive", ids).status_code == 200
+    assert len(modified) == 1
+    assert modified[0][0] == ids
+
+
+def test_an_empty_list_is_rejected(client, connected, modified):
+    assert post_ids(client, "archive", []).status_code == 422
+    assert modified == []
+
+
+def test_an_absurd_batch_is_rejected(client, connected, modified):
+    assert post_ids(client, "archive", [f"g{n}" for n in range(1001)]).status_code == 422
+    assert modified == []
+
+
+def test_the_batch_endpoint_is_used_and_not_a_loop(db, connected, monkeypatch):
+    """⚠️ גם שכבת השירות: כתובת אחת, batchModify, ולא modify לכל מייל."""
     seen = []
     monkeypatch.setattr(
-        gmail.httpx,
-        "post",
-        lambda url, **kw: seen.append(url) or _ok_response(),
+        gmail.httpx, "post", lambda url, **kw: seen.append((url, kw.get("json"))) or _ok_response()
     )
-    gmail.archive(db, "gid-1")
-    gmail.unarchive(db, "gid-1")
-    assert all(url.endswith("/modify") for url in seen), seen
-    assert not any("trash" in url.lower() or "delete" in url.lower() for url in seen)
+    gmail.archive(db, ["gid-1", "gid-2"])
+    assert len(seen) == 1
+    url, body = seen[0]
+    assert url.endswith("/messages/batchModify")
+    assert body["ids"] == ["gid-1", "gid-2"]
+    assert not any("trash" in url.lower() or "delete" in url.lower() for url, _ in seen)
+
+
+def test_nothing_is_sent_for_an_empty_list(db, connected, monkeypatch):
+    monkeypatch.setattr(
+        gmail.httpx, "post", lambda *a, **k: pytest.fail("אין לפנות לגוגל על רשימה ריקה")
+    )
+    assert gmail.archive(db, []) == []
 
 
 class _ok_response:
-    status_code = 200
+    status_code = 204
 
     def json(self):
         return {}
 
 
 def test_archiving_without_a_connection_says_to_connect(client, modified):
-    response = client.post("/api/emails/gid-1/archive")
+    response = post_ids(client, "archive", ["gid-1"])
     assert response.status_code == 503
     assert "הגדרות" in response.json()["detail"]
     assert modified == []
@@ -546,8 +627,8 @@ def test_a_failed_archive_is_a_502(client, connected, monkeypatch):
     def boom(*a, **k):
         raise gmail.GmailError("גוגל החזירה 500")
 
-    monkeypatch.setattr(gmail, "_modify", boom)
-    response = client.post("/api/emails/gid-1/archive")
+    monkeypatch.setattr(gmail, "_batch_modify", boom)
+    response = post_ids(client, "archive", ["gid-1"])
     assert response.status_code == 502
     assert "לנסות שוב" in response.json()["detail"]
 
@@ -556,13 +637,13 @@ def test_a_revoked_connection_during_an_archive_is_a_503(client, connected, monk
     def boom(*a, **k):
         raise gauth.GoogleDisconnected("invalid_grant")
 
-    monkeypatch.setattr(gmail, "_modify", boom)
-    assert client.post("/api/emails/gid-1/archive").status_code == 503
+    monkeypatch.setattr(gmail, "_batch_modify", boom)
+    assert post_ids(client, "archive", ["gid-1"]).status_code == 503
 
 
 def test_archiving_requires_a_login(anon, connected, modified):
-    assert anon.post("/api/emails/gid-1/archive").status_code == 401
-    assert anon.post("/api/emails/gid-1/unarchive").status_code == 401
+    assert anon.post("/api/emails/archive", json={"ids": ["gid-1"]}).status_code == 401
+    assert anon.post("/api/emails/unarchive", json={"ids": ["gid-1"]}).status_code == 401
     assert modified == []
 
 
@@ -573,6 +654,6 @@ def test_an_archived_mail_is_gone_from_the_next_list(client, connected, monkeypa
     """
     listed(monkeypatch, [mail(1), mail(2)])
     assert len(client.get("/api/emails").json()["items"]) == 2
-    client.post("/api/emails/gid-1/archive")
+    post_ids(client, "archive", ["gid-1"])
     listed(monkeypatch, [mail(2)])
     assert [item["id"] for item in client.get("/api/emails").json()["items"]] == ["gid-2"]

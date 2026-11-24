@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api, query } from "../api";
+import MailRow from "../components/MailRow";
 import Modal from "../components/Modal";
 import { formatWhen } from "../format";
+import { linkify } from "../linkify";
 import { MAIL_SCOPE_LABELS, type MailBody, type MailItem, type MailList, type MailScope } from "../types";
 
 /** לשוניות הסינון. פותחים על "חשוב" — זה הסינון שהמשתמש ביקש לראות ראשון */
@@ -19,9 +21,10 @@ export default function Mail() {
   const [open, setOpen] = useState<MailBody | null>(null);
   const [opening, setOpening] = useState<MailItem | null>(null);
   const [openError, setOpenError] = useState("");
-  // המייל שהרגע אורכב, לכפתור הביטול. ⚠️ נשמר בזיכרון המסך בלבד —
-  // רענון מאבד את הביטול, והמייל נשאר בארכיון ולא נמחק
-  const [undo, setUndo] = useState<MailItem | null>(null);
+  // מה שהרגע אורכב, לכפתור הביטול: השורות להחזרה, והמזהים שהוצאו
+  // בפועל. ⚠️ נשמר בזיכרון המסך בלבד — רענון מאבד את הביטול, והמיילים
+  // נשארים בארכיון ולא נמחקים
+  const [undo, setUndo] = useState<{ rows: MailItem[]; ids: string[] } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -81,17 +84,23 @@ export default function Mail() {
    * ארכוב. ⚠️ אינו מוחק: המייל יוצא מהדואר הנכנס, נשאר בתיבה, ונמצא
    * בחיפוש. לכן אין כאן שאלת אישור — יש כפתור ביטול.
    */
-  const archive = async (item: MailItem) => {
-    setBusy(item.id);
+  const archive = async (rows: MailItem[]) => {
+    if (rows.length === 0) return;
+    // ⚠️⚠️ כל ההודעות של כל שרשור, ולא ה-id של השורה. ארכוב ההודעה
+    // האחרונה בלבד השאיר את הישנה בדואר הנכנס, והשורה חזרה ברענון
+    const ids = rows.flatMap((row) => (row.thread_ids.length ? row.thread_ids : [row.id]));
+    setBusy(rows[0].id);
     setError("");
-    drop(item, true);
+    rows.forEach((row) => drop(row, true));
     closeRead();
     try {
-      await api(`/emails/${encodeURIComponent(item.id)}/archive`, { method: "POST" });
-      setUndo(item);
+      const done = await api<{ ids: string[] }>("/emails/archive", { method: "POST", body: { ids } });
+      // ⚠️ נשמר בדיוק מה שהוצא, כדי שהביטול לא יחזיר הודעה שהייתה
+      // מארוכבת עוד קודם
+      setUndo({ rows, ids: done.ids });
     } catch (e) {
-      // נכשל — השורה חוזרת, אחרת המסך היה משקר על מה שבתיבה
-      drop(item, false);
+      // נכשל — השורות חוזרות, אחרת המסך היה משקר על מה שבתיבה
+      rows.forEach((row) => drop(row, false));
       setError((e as Error).message);
     } finally {
       setBusy(null);
@@ -100,17 +109,25 @@ export default function Mail() {
 
   const undoArchive = async () => {
     if (!undo) return;
-    const item = undo;
+    const { rows, ids } = undo;
     setUndo(null);
-    setBusy(item.id);
+    setBusy(rows[0].id);
     try {
-      await api(`/emails/${encodeURIComponent(item.id)}/unarchive`, { method: "POST" });
-      drop(item, false);
+      await api("/emails/unarchive", { method: "POST", body: { ids } });
+      rows.forEach((row) => drop(row, false));
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(null);
     }
+  };
+
+  /** ארכוב של כל הלא-חשובים. ⚠️ שואל, כי אצווה גדולה מלחיצה אחת */
+  const archiveAllOther = async () => {
+    const rows = (list?.items ?? []).filter((row) => !row.important);
+    if (rows.length === 0) return;
+    if (!confirm(`לארכב ${rows.length} מיילים שסומנו "לא חשוב"? הם לא יימחקו, ואפשר לבטל.`)) return;
+    await archive(rows);
   };
 
   const items = (list?.items ?? []).filter(
@@ -149,6 +166,12 @@ export default function Mail() {
         <button className="link-btn" onClick={load} disabled={loading}>
           רענון
         </button>
+        {/* רק בלשונית "לא חשוב": ארכוב קבוצתי של מה שמוצג בה */}
+        {tab === "other" && counts.other > 0 && (
+          <button onClick={archiveAllOther} disabled={busy !== null}>
+            ארכב את כל {counts.other} הלא-חשובים
+          </button>
+        )}
       </div>
 
       {/* הסינון עצמו. הרשימה כבר ביד, ולכן מעבר בין לשוניות אינו פונה לגוגל */}
@@ -172,9 +195,12 @@ export default function Mail() {
       {undo && (
         <div className="card mail-undo">
           <span>
-            «{undo.subject}» הועבר לארכיון. הוא לא נמחק — נשאר בתיבה ונמצא בחיפוש.
+            {undo.rows.length === 1
+              ? `«${undo.rows[0].subject}» הועבר לארכיון.`
+              : `${undo.rows.length} מיילים הועברו לארכיון.`}{" "}
+            הם לא נמחקו — נשארים בתיבה ונמצאים בחיפוש.
           </span>
-          <button onClick={undoArchive} disabled={busy === undo.id}>
+          <button onClick={undoArchive} disabled={busy === undo.rows[0].id}>
             ביטול
           </button>
           <button className="link-btn" onClick={() => setUndo(null)}>
@@ -211,60 +237,13 @@ export default function Mail() {
           )}
           <ul className="task-list">
             {items.map((item) => (
-              <li
+              <MailRow
                 key={item.id}
-                className={`card clickable mail ${item.unread ? "unread" : ""}`}
-                onClick={() => read(item)}
-              >
-                <div className="mail-head">
-                  <span className="mail-sender">
-                    {item.unread && (
-                      <>
-                        <span className="mail-dot" aria-hidden="true">
-                          ●
-                        </span>
-                        <span className="sr-only">לא נקרא</span>
-                      </>
-                    )}
-                    {item.sender}
-                    {/* שורה אחת לכל שרשור. המונה מראה שלא נעלמה הודעה */}
-                    {item.thread_count > 1 && (
-                      <span className="pill" title={`${item.thread_count} הודעות בשרשור הזה`}>
-                        {item.thread_count}
-                      </span>
-                    )}
-                    {item.is_client && (
-                      <span className="pill" title="כתובת רשומה בכרטיס לקוח">
-                        לקוח
-                      </span>
-                    )}
-                  </span>
-                  <span className="muted mail-when">
-                    {item.has_attachments && (
-                      <>
-                        <span title="יש קובץ מצורף" aria-hidden="true">
-                          📎
-                        </span>
-                        <span className="sr-only">יש קובץ מצורף</span>
-                      </>
-                    )}
-                    {formatWhen(item.received_at)}
-                  </span>
-                </div>
-                <div className="mail-subject">{item.subject}</div>
-                {item.line && <div className="muted clamp">{item.line}</div>}
-                {/* מחוץ לאזור הלחיצה שפותח את המייל, אחרת ארכוב היה
-                    פותח אותו באותה לחיצה */}
-                <div className="mail-actions" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    className="link-btn"
-                    disabled={busy === item.id}
-                    onClick={() => archive(item)}
-                  >
-                    ארכוב
-                  </button>
-                </div>
-              </li>
+                item={item}
+                busy={busy === item.id}
+                onOpen={() => read(item)}
+                onArchive={() => archive([item])}
+              />
             ))}
           </ul>
         </>
@@ -295,14 +274,14 @@ export default function Mail() {
               )}
               {/* ⚠️ טקסט, לא HTML. מייל הוא מה שאדם אחר כתב, ו-dangerouslySetInnerHTML
                   כאן היה מריץ את ה-HTML שלו בדשבורד. ההמרה לטקסט נעשית בשרת */}
-              <pre>{open.body}</pre>
+              <pre>{linkify(open.body)}</pre>
               {open.quoted_removed && (
                 <p className="muted">
                   ההיסטוריה המצוטטת בסוף המייל הושמטה. היא נמצאת בג׳ימייל.
                 </p>
               )}
               <div className="actions">
-                <button disabled={busy === opening.id} onClick={() => archive(opening)}>
+                <button disabled={busy === opening.id} onClick={() => archive([opening])}>
                   ארכוב
                 </button>
               </div>
