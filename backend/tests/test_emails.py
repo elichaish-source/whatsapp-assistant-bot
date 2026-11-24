@@ -657,3 +657,94 @@ def test_an_archived_mail_is_gone_from_the_next_list(client, connected, monkeypa
     post_ids(client, "archive", ["gid-1"])
     listed(monkeypatch, [mail(2)])
     assert [item["id"] for item in client.get("/api/emails").json()["items"]] == ["gid-2"]
+
+
+# --- הפוך למשימה (שלב 4-5) ---
+
+
+@pytest.fixture
+def drafted(monkeypatch):
+    """הצעה קבועה, בלי לקרוא למודל."""
+    monkeypatch.setattr(
+        gmail,
+        "task_draft",
+        lambda mail: gmail.TaskDraft(
+            title="לחתום על ההסכם", due_date="2026-12-01", summary="דני מבקש חתימה"
+        ),
+    )
+
+
+def test_the_draft_says_what_to_do_and_not_the_subject(client, connected, monkeypatch, drafted):
+    """⚠️ נושא המייל אינו כותרת משימה. אומת מול התיבה ב-23.11.2026."""
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    body = client.get("/api/emails/gid-1/task-draft").json()
+    assert body["title"] == "לחתום על ההסכם"
+    assert body["due_date"] == "2026-12-01"
+
+
+def test_the_draft_attaches_the_client_by_the_sender_address(client, connected, db, monkeypatch, drafted):
+    """⚠️ בקוד ולא במודל: שיוך הוא עובדה שיש עליה נתונים."""
+    db.add(Client(name="דני ובניו", email="Dani@Example.com"))
+    db.commit()
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    assert client.get("/api/emails/gid-1/task-draft").json()["client_id"] is not None
+
+
+def test_an_unknown_sender_leaves_the_client_empty(client, connected, monkeypatch, drafted):
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    assert client.get("/api/emails/gid-1/task-draft").json()["client_id"] is None
+
+
+def test_the_notes_carry_a_link_back_to_gmail(client, connected, monkeypatch, drafted):
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    notes = client.get("/api/emails/gid-1/task-draft").json()["notes"]
+    assert "https://mail.google.com/" in notes
+    assert "gid-1" in notes
+
+
+def test_the_draft_saves_nothing(client, connected, db, monkeypatch, drafted):
+    """⚠️⚠️ ההבטחה של 4-5: עד "שמור" לא נוצר כלום.
+
+    זה היתרון המרכזי של המסך על הבוט — הפיכת מייל למשימה כמעט תמיד
+    דורשת עריכה.
+    """
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    assert client.get("/api/emails/gid-1/task-draft").status_code == 200
+    db.expire_all()
+    assert db.scalars(select(Task)).all() == []
+
+
+def test_a_task_from_a_mail_remembers_which_mail(client, connected, db):
+    """המזהה נשמר, ולכן אפשר לחזור למייל מתוך המשימה."""
+    created = client.post(
+        "/api/tasks", json={"title": "לחתום", "email_message_id": "gid-1"}
+    ).json()
+    assert created["email_message_id"] == "gid-1"
+    assert created["source"] == "email"
+
+
+def test_a_task_without_a_mail_stays_a_dashboard_task(client, connected):
+    """⚠️ המקור נגזר מהנוכחות של המזהה ולא משדה שהלקוח מצהיר."""
+    created = client.post("/api/tasks", json={"title": "משימה רגילה"}).json()
+    assert created["email_message_id"] is None
+    assert created["source"] == "dashboard"
+
+
+def test_the_draft_without_a_connection_says_to_connect(client, monkeypatch, drafted):
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    response = client.get("/api/emails/gid-1/task-draft")
+    assert response.status_code == 503
+    assert "הגדרות" in response.json()["detail"]
+
+
+def test_a_gmail_failure_during_the_draft_is_a_502(client, connected, monkeypatch, drafted):
+    def boom(*a, **k):
+        raise gmail.GmailError("רשת")
+
+    monkeypatch.setattr(gmail, "fetch_full", boom)
+    assert client.get("/api/emails/gid-1/task-draft").status_code == 502
+
+
+def test_the_draft_requires_a_login(anon, connected, monkeypatch, drafted):
+    monkeypatch.setattr(gmail, "fetch_full", lambda db_, mid: full(1))
+    assert anon.get("/api/emails/gid-1/task-draft").status_code == 401
