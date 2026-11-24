@@ -318,6 +318,8 @@ export default function Mail() {
                 busy={busy === item.id}
                 onOpen={() => read(item)}
                 onArchive={() => archive([item])}
+                onTask={() => toTask(item)}
+                onReply={() => reply(item)}
               />
             ))}
           </ul>
