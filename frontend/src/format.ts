@@ -36,3 +36,23 @@ export function isOverdue(date: string | null): boolean {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
   return date < today;
 }
+
+/**
+ * שעה למייל של היום, ותאריך ושעה לכל השאר.
+ *
+ * ⚠️ בלי התאריך, רשימה שבועית מציגה "20:36" ו-"12:29" זה מתחת לזה כאילו
+ * הם מאותו יום. זה היה באג אמיתי בסיכום של הבוט, ותוקן ב-19.11.2026.
+ */
+export function formatWhen(value: string): string {
+  if (!value) return "";
+  const when = new Date(value);
+  const day = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: TZ });
+  const time = when.toLocaleTimeString("he-IL", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (day(when) === day(new Date())) return time;
+  const date = when.toLocaleDateString("he-IL", { timeZone: TZ, day: "2-digit", month: "2-digit" });
+  return `${date} ${time}`;
+}

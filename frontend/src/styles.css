@@ -678,3 +678,186 @@ pre {
   font-size: 0.9rem;
   line-height: 1.5;
 }
+
+/* --- מיילים (שלב 4-3) --- */
+
+.mail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* השולח בהתחלה והשעה בקצה השני, כדי שהעין תסרוק עמודת שולחים אחת */
+.mail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mail-sender {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.mail-when {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* נקודה ולא הדגשה בלבד: ברשימה שבה רוב המיילים נקראו, הבדל בעובי הגופן
+   לא נתפס במבט, ובמיוחד לא בעברית */
+.mail-dot {
+  color: var(--primary);
+  font-size: 0.7rem;
+}
+
+.mail.unread .mail-subject {
+  font-weight: 600;
+}
+
+.mail-subject {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* לשוניות הסינון נושאות מונה, ולכן צריכות מרווח בין הטקסט למונה */
+.when-tabs button .badge {
+  margin-inline-start: 6px;
+}
+
+/* ⚠️ המונה בלשונית הלחוצה היה אפור על רקע ירוק ולא נקרא כלל: ‏`.badge`
+   קובע `color: var(--muted)` ומסגרת בצבע הגבול, ושניהם נועדו לרקע לבן.
+   בלשונית פעילה הוא לובש את צבע הטקסט של הכפתור, על רקע שקוף-למחצה
+   שמבדיל אותו מהתווית בלי להסתמך על הבדל גוון */
+.when-tabs button.on .badge {
+  color: inherit;
+  font-weight: 600;
+  /* ברירת מחדל שעובדת בכל דפדפן, וגם במצב כהה שבו טקסט הלשונית כהה
+     על רקע בהיר: המסגרת פשוט לובשת את צבע הטקסט */
+  border-color: currentColor;
+  /* ועידון למי שתומך: מסגרת רכה יותר ורקע שקוף-למחצה. אם הדפדפן אינו
+     מכיר color-mix הוא מתעלם משתי השורות, והמונה נשאר קריא */
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+/* כפתור הארכוב בשורה: בקצה, ולא נדחס לתוך הטקסט */
+.mail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 14px;
+  margin-top: 2px;
+}
+
+/* הודעת הביטול. ⚠️ אינה נעלמת מעצמה: מי שארכב בטעות צריך למצוא אותה,
+   ולא להספיק ללחוץ בתוך חמש שניות */
+.mail-undo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+  border-color: var(--primary);
+}
+
+.mail-undo span {
+  flex: 1 1 240px;
+}
+
+/* קישור בתוך גוף מייל. ⚠️ נבנה כרכיב React ולא מ-HTML של המייל */
+.mail-link {
+  color: var(--primary);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+/* --- החלקה לארכוב --- */
+
+/* השורה יושבת מעל רקע שמתגלה בזמן הגרירה */
+.mail-slot {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.mail-swipe {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-inline-start: 18px;
+  border-radius: 12px;
+  background: var(--pill);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* חצינו את הסף: שחרור עכשיו יארכב */
+.mail-swipe.armed {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.mail-slot .mail {
+  position: relative;
+  transition: transform 0.18s ease;
+  /* ⚠️ הגלילה האנכית נשארת של הדפדפן, והאופקית שלנו */
+  touch-action: pan-y;
+}
+
+/* ⚠️ כפתור הארכוב רק במכשירים עם עכבר. בנייד מארכבים בהחלקה, ובלי זה
+   הכפתור תופס מקום בכל שורה בשביל פעולה שיש לה כבר תנועה */
+@media (hover: none) {
+  /* ⚠️ רק הארכוב מוסתר במגע, כי שם מארכבים בהחלקה. המענה וההפיכה
+     למשימה נשארים — אין להם תנועה מקבילה, והמשתמש ביקש אותם על המסך */
+  .mail-archive-btn {
+    display: none;
+  }
+}
+
+/* --- מענה ושליחה --- */
+
+.reply {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reply-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* כל הצעה היא כפתור שממלא את תיבת הכתיבה. הטקסט מקוצר, כי הבחירה
+   נעשית לפי התווית ולא לפי קריאה מלאה */
+.reply-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: start;
+  padding: 8px 10px;
+}
+
+.reply-text {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* ⚠️ מסך האישור שלפני השליחה. מסגרת בצבע הראשי, כדי שיהיה ברור
+   שזה לא עוד שלב בעריכה אלא הרגע שאחריו אין חזרה */
+.reply-confirm {
+  border-color: var(--primary);
+}

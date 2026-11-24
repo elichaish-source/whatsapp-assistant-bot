@@ -6,6 +6,7 @@ import ClientDetail from "./pages/ClientDetail";
 import Clients from "./pages/Clients";
 import ComingSoon from "./pages/ComingSoon";
 import Login from "./pages/Login";
+import Mail from "./pages/Mail";
 import Memory from "./pages/Memory";
 import Projects from "./pages/Projects";
 import Recurring from "./pages/Recurring";
@@ -19,7 +20,7 @@ const NAV = [
   { to: "/recurring", label: "חוזרות" },
   { to: "/memory", label: "זיכרון" },
   { to: "/finance", label: "כספים", soon: true },
-  { to: "/mail", label: "מיילים", soon: true },
+  { to: "/mail", label: "מיילים" },
   { to: "/whatsapp", label: "וואטסאפ", soon: true },
   { to: "/vault", label: "כספת", soon: true },
   { to: "/settings", label: "הגדרות" },
@@ -75,6 +76,7 @@ export default function App() {
             <Route path="/projects" element={<Projects />} />
             <Route path="/recurring" element={<Recurring />} />
             <Route path="/memory" element={<Memory />} />
+            <Route path="/mail" element={<Mail />} />
             <Route path="/settings" element={<Settings />} />
             {NAV.filter((n) => n.soon).map((n) => (
               <Route key={n.to} path={n.to} element={<ComingSoon title={n.label} />} />

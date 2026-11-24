@@ -122,6 +122,9 @@ class TaskIn(BaseModel):
     reminder_at: datetime | None = None
     priority: Priority = "week"
     notes: str | None = None
+    # המייל שממנו נוצרה המשימה (שלב 4-5). ⚠️ מזהה בלבד ולא תוכן, ומה
+    # שנשמר בכותרת ובהערות הוא מה שהמשתמש אישר בטופס
+    email_message_id: str | None = Field(default=None, max_length=100)
 
     _clean = field_validator("notes", mode="before")(_blank_to_none)
 
@@ -140,6 +143,8 @@ class TaskOut(ORMModel):
     priority: Priority
     notes: str | None
     source: TaskSource
+    # ריק בכל משימה שלא נוצרה ממייל. ממנו נבנה הקישור חזרה לג'ימייל
+    email_message_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -292,6 +297,13 @@ class EmailItemOut(BaseModel):
     is_client: bool = False
     unread: bool = False
     has_attachments: bool = False
+    # כמה הודעות יש בשרשור שהשורה מייצגת. ⚠️ מוצג למשתמש, כדי ששורה
+    # שמאחוריה שתי הודעות לא תיראה כאילו אחת מהן נעלמה
+    thread_count: int = 1
+    # ⚠️ כל ההודעות של השרשור שנמצאות בדואר הנכנס. **זה מה שהמסך שולח
+    # לארכוב**, ולא ``id`` לבדו — אחרת הודעה ישנה בשרשור נשארת בדואר
+    # הנכנס והשורה חוזרת ברענון הבא
+    thread_ids: list[str] = []
 
 
 class EmailListOut(BaseModel):
@@ -303,6 +315,22 @@ class EmailListOut(BaseModel):
     other: int = 0
     # האם נגענו בתקרת השליפה. המסך אומר את זה למשתמש
     truncated: bool = False
+
+
+class EmailIdsIn(BaseModel):
+    """המיילים שעליהם פועלים: שרשור אחד, או כל הלא-חשובים יחד.
+
+    ⚠️ **המזהים מגיעים מהמסך ואינם מחושבים מחדש בשרת.** אחרת מייל
+    שנכנס בין הטעינה ללחיצה היה מתארכב בלי שהמשתמש ראה אותו.
+    """
+
+    ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+class EmailIdsOut(BaseModel):
+    """מה שהוצא בפועל. המסך שומר את זה, ושולח אותו חזרה בביטול."""
+
+    ids: list[str] = []
 
 
 class EmailBodyOut(BaseModel):
@@ -318,3 +346,48 @@ class EmailBodyOut(BaseModel):
     body: str
     attachments: list[str] = []
     quoted_removed: bool = False
+
+
+class TaskDraftOut(BaseModel):
+    """הצעה למשימה ממייל (שלב 4-5). ⚠️ **אינה נשמרת** — הטופס נפתח
+    מלא מראש, והמשימה נוצרת רק בלחיצה על "שמור"."""
+
+    title: str
+    due_date: date | None = None
+    # לפי כתובת השולח מול כרטיסי הלקוחות. ⚠️ נקבע בקוד ולא במודל
+    client_id: int | None = None
+    notes: str = ""
+    email_message_id: str = ""
+
+
+class ReplyOptionOut(BaseModel):
+    """הצעת ניסוח. ⚠️ **אינה נשלחת** — המשתמש עורך, מאשר ושולח."""
+
+    label: str = ""
+    text: str
+
+
+class ReplyDraftOut(BaseModel):
+    """מה שהמסך צריך כדי להציע תשובה: לאן היא תצא, ומה אפשר לכתוב.
+
+    ⚠️ **הנמען נגזר בשרת מהמייל המקורי**, והמסך רק מציג אותו.
+    """
+
+    to: str
+    subject: str
+    options: list[ReplyOptionOut] = []
+
+
+class ReplyIn(BaseModel):
+    """גוף התשובה. ⚠️ **הנמען אינו כאן בכוונה** — הוא נקרא בשרת מהמייל
+    המקורי, אחרת היה אפשר לגרום למסך לשלוח לכל כתובת."""
+
+    body: str = Field(min_length=1, max_length=20000)
+
+
+class ReplySentOut(BaseModel):
+    """מה יצא ולאן, כדי שהמסך יאמר למשתמש בדיוק מה קרה."""
+
+    to: str
+    subject: str
+    archived: bool = False
