@@ -19,6 +19,7 @@ from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import EmailAlert, Task
+from . import briefs
 from .actions import describe, now_local, to_local
 
 log = logging.getLogger(__name__)
@@ -165,6 +166,11 @@ def _tick() -> None:
             send_mail_digest(db)
         except Exception:  # noqa: BLE001 - הסיכום הוא נוחות, לא תלות
             log.exception("סיכום המיילים נכשל")
+            db.rollback()
+        try:
+            brief_before_meetings(db)
+        except Exception:  # noqa: BLE001 - התדריך הוא נוחות, לא תלות
+            log.exception("התדריך לפני פגישה נכשל")
             db.rollback()
     finally:
         db.close()
@@ -440,3 +446,42 @@ def send_mail_digest(db: Session, moment: datetime | None = None) -> int:
 
     log.info("סיכום המיילים נשלח: %d הודעות", sent)
     return sent
+
+
+# --- התדריך לפני פגישה (שלב 4ב-3) ---
+
+# ⚠️⚠️ **השעון של התדריך.** הלולאה רצה כל 30 שניות, וכל מה שנתלה עליה
+# יורש את הקצב הזה — זה הלקח שנרשם ב-24.11, אחרי שהכנת הטיוטות שלפה את
+# כל התיבה מגוגל פעמיים בדקה. סריקת היומן כל חמש דקות מספיקה: החלון הוא
+# 45 דקות, ולכן פגישה נתפסת בוודאות, והתדריך יוצא 40–45 דקות לפניה.
+BRIEF_EVERY = timedelta(minutes=5)
+
+_briefed_at: datetime | None = None
+
+
+def brief_before_meetings(db: Session, moment: datetime | None = None) -> int:
+    """סורק את היומן ושולח תדריכים. מחזיר כמה יצאו.
+
+    ⚠️ **זו נוחות ולא תלות:** כל כשל נבלע ואינו נוגע בתזכורות.
+
+    ⚠️ **השעון מסומן לפני העבודה ולא אחריה.** אם השליפה מגוגל נכשלה,
+    אין טעם לנסות שוב בעוד שלושים שניות ולשרוף קריאות — אותו שיקול של
+    ``warm_mail_screen``.
+    """
+    global _briefed_at
+    moment = moment or now()
+    if _briefed_at is not None and moment - _briefed_at < BRIEF_EVERY:
+        return 0
+
+    cred = gauth.get_credential(db)
+    if cred is None or cred.status != "connected":
+        return 0
+
+    _briefed_at = moment
+    return briefs.send_briefs(db, moment, ring=ring)
+
+
+def reset_brief_clock() -> None:
+    """לבדיקות: מאפס את השעון כדי שהסריקה הבאה תרוץ."""
+    global _briefed_at
+    _briefed_at = None

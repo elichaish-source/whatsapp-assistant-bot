@@ -103,7 +103,13 @@ class Calendar:
 
 @dataclass
 class Event:
-    """אירוע אחד, כפי שהוא מוצג. בלי שדה שאינו מוצג למשתמש."""
+    """אירוע אחד, כפי שהוא מוצג.
+
+    ⚠️ **``emails`` אינו מוצג למשתמש וקיים לזיהוי בלבד** (נוסף ב-4ב-3).
+    ‏``attendees`` הוא מה שנראה — ושם הלקוח מחליף בו את הכתובת — ולכן
+    אי אפשר להשתמש בו לזיהוי: אחרי ההחלפה אין בו כתובת, ולפניה גוגל
+    מחזירה בו לפעמים ``displayName``. **זיהוי הולך לפי כתובת.**
+    """
 
     id: str
     title: str
@@ -120,6 +126,8 @@ class Event:
     day: date | None = None
     location: str = ""
     attendees: list[str] = field(default_factory=list)
+    # ⚠️ כתובות המשתתפים, באותיות קטנות. לזיהוי בקוד ולא להצגה
+    emails: list[str] = field(default_factory=list)
 
     @property
     def when(self) -> date:
@@ -257,6 +265,13 @@ def _parse(raw: dict, calendar_name: str, from_primary: bool = True) -> Event | 
         # פגישה שהוא ארגן הייתה מוצגת כאילו יש בה אדם אחד יותר
         if person.get("email") and not person.get("self")
     ]
+    # ⚠️ הכתובות בנפרד מהשמות המוצגים, לזיהוי הלקוח ב-4ב-3. אותו סינון
+    # של ``self``, כדי שפגישה שהמשתמש ארגן לא תזוהה לפי הכתובת שלו עצמו
+    emails = [
+        parseaddr(person.get("email", ""))[1].strip().lower()
+        for person in raw.get("attendees") or []
+        if person.get("email") and not person.get("self")
+    ]
     common = {
         "id": raw.get("id") or "",
         "title": title,
@@ -264,6 +279,7 @@ def _parse(raw: dict, calendar_name: str, from_primary: bool = True) -> Event | 
         "from_primary": from_primary,
         "location": (raw.get("location") or "").strip(),
         "attendees": attendees,
+        "emails": [address for address in emails if address],
     }
 
     if start.get("date"):
@@ -321,22 +337,21 @@ def span(scope: str, today: date | None = None) -> tuple[date, date]:
     return first, first
 
 
-def agenda(db: Session, scope: str = "today") -> list[Event]:
-    """מה יש בטווח המבוקש, מכל היומנים שנקראים, ממוין לפי זמן.
+def window(db: Session, begins: datetime, ends: datetime) -> list[Event]:
+    """מה יש בין שתי נקודות זמן, מכל היומנים שנקראים, ממוין לפי זמן.
 
     ⚠️ **קורא מכמה יומנים ולא רק מהראשי.** כרגע רק הראשי בשימוש בפועל,
     ולכן ההבדל אינו נראה — **אבל ברגע שתיכנס פגישה ליומן המשפחתי, תשובה
     שקוראת רק את הראשי תהיה שגויה בשקט.** זה אותו סוג כשל של
     ``resultSizeEstimate`` ב-4-6: מספר שנראה סביר ואינו נכון.
+
+    ⚠️ **מקבל זמנים ולא ``scope``** (פוצל ב-4ב-3): התדריך צריך "מהרגע
+    הזה ועד 45 דקות קדימה", וטווח כזה אינו יום ואינו שבוע. ``agenda``
+    נשארה העטיפה שממירה ``scope`` לזמנים.
     """
     cals = calendars(db)
     if not cals:
         return []
-
-    tz = local_tz()
-    first, last = span(scope)
-    begins = datetime.combine(first, time.min, tzinfo=tz)
-    ends = datetime.combine(last + timedelta(days=1), time.min, tzinfo=tz)
 
     # ⚠️ הטוקן נשלף **פעם אחת לפני** התהליכונים. ``Session`` אינו בטוח
     # לשימוש מקביל, ושליפה בתוך תהליכון היא בדיוק הבאג של 4-6
@@ -357,6 +372,45 @@ def agenda(db: Session, scope: str = "today") -> list[Event]:
     # אירוע של כל היום ראשון באותו תאריך, ואחריו לפי שעה
     found.sort(key=lambda event: (event.when, not event.all_day, event.start or begins))
     return found
+
+
+def agenda(db: Session, scope: str = "today") -> list[Event]:
+    """מה יש בטווח שהמשתמש ביקש: היום, מחר או השבוע."""
+    tz = local_tz()
+    first, last = span(scope)
+    return window(
+        db,
+        datetime.combine(first, time.min, tzinfo=tz),
+        datetime.combine(last + timedelta(days=1), time.min, tzinfo=tz),
+    )
+
+
+def last_meeting_with(
+    db: Session, addresses: set[str], before: datetime, days: int = 90
+) -> Event | None:
+    """הפגישה האחרונה שהייתה עם אחת הכתובות האלה, לפני ``before``.
+
+    ⚠️ **זיהוי לפי כתובת ולא לפי שם** — ``Event.emails`` ולא
+    ``attendees``: גוגל מחזירה ``displayName`` רק לפעמים, וב-4ב-1 נמדד
+    שהיא לא החזירה אותו לאף אחד מ-7 המשתתפים.
+
+    ⚠️ **חלון של 90 יום, ולא "מאז ומתמיד".** פגישה מלפני שנה אינה
+    "הפעם הקודמת" במובן שמעניין לפני פגישה, והטווח גם חוסם שליפה שתגדל
+    בלי גבול. ``None`` פירושו "לא נמצאה", ולא "אין נתונים".
+    """
+    if not addresses:
+        return None
+    found = [
+        event
+        for event in window(db, before - timedelta(days=days), before)
+        if not event.all_day
+        and event.start is not None
+        and event.start < before
+        and addresses & set(event.emails)
+    ]
+    if not found:
+        return None
+    return max(found, key=lambda event: event.start)  # type: ignore[arg-type,return-value]
 
 
 # --- בדיקת התנגשות ---

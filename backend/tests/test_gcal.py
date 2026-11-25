@@ -665,3 +665,130 @@ def test_the_next_free_slot_is_rounded_to_a_quarter_hour(db, monkeypatch):
     found = gcal.next_free(db, datetime(2026, 11, 26, 10, 7, tzinfo=IL), 60)
     assert found is not None
     assert found.minute % gcal.SLOT_MINUTES == 0
+
+
+# --- טווח חופשי והפגישה הקודמת (שלב 4ב-3) ---
+
+
+def test_the_attendee_addresses_are_kept_separately_for_identification():
+    """⚠️⚠️ ``attendees`` מוצג ו-``emails`` מזהה, והם אינם אותו דבר.
+
+    ‏``attendees`` מקבל ``displayName`` כשגוגל מחזירה אותו, ושם הלקוח
+    מחליף בו את הכתובת אחרי השליפה. אחרי ההחלפה **אין בו כתובת**, ולכן
+    זיהוי לפיו היה נשבר בשקט בדיוק לפגישות שהוא עובד עליהן.
+    """
+    raw = timed(
+        "2026-11-26T10:00:00+02:00",
+        attendees=[
+            {"email": "Naor@Example.com", "displayName": "נאור"},
+            {"email": "me@gmail.com", "self": True},
+        ],
+    )
+    event = gcal._parse(raw, "ראשי")
+    assert event is not None
+    assert event.attendees == ["נאור"]
+    # ⚠️ באותיות קטנות, כדי שההשוואה מול clients.email לא תהיה תלויה בגוגל
+    assert event.emails == ["naor@example.com"]
+
+
+def test_an_event_without_attendees_has_no_addresses():
+    event = gcal._parse(timed("2026-11-26T10:00:00+02:00"), "ראשי")
+    assert event is not None
+    assert event.emails == []
+
+
+def test_a_window_asks_google_for_exactly_the_times_it_was_given(db, monkeypatch):
+    """⚠️ ``window`` מקבל זמנים ולא ``scope``: התדריך צריך "מהרגע הזה
+    ועד 45 דקות קדימה", וטווח כזה אינו יום ואינו שבוע."""
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(
+        gcal, "calendars", lambda session: [gcal.Calendar(id="me", name="ראשי", primary=True)]
+    )
+    seen: dict = {}
+
+    def fake(token, cal, begins, ends):
+        seen["begins"], seen["ends"] = begins, ends
+        return []
+
+    monkeypatch.setattr(gcal, "_events", fake)
+    begins = datetime(2026, 11, 26, 9, 15, tzinfo=IL)
+    ends = datetime(2026, 11, 26, 10, 0, tzinfo=IL)
+    assert gcal.window(db, begins, ends) == []
+    assert seen == {"begins": begins, "ends": ends}
+
+
+def _past(monkeypatch, events: list):
+    monkeypatch.setattr(gcal, "window", lambda session, begins, ends: events)
+
+
+def test_the_previous_meeting_is_the_latest_one_with_that_address(db, monkeypatch):
+    older = gcal.Event(
+        id="old",
+        title="פגישה ראשונה",
+        calendar="ראשי",
+        start=datetime(2026, 11, 1, 10, 0, tzinfo=IL),
+        emails=["naor@example.com"],
+    )
+    newer = gcal.Event(
+        id="new",
+        title="פגישה שנייה",
+        calendar="ראשי",
+        start=datetime(2026, 11, 12, 10, 0, tzinfo=IL),
+        emails=["naor@example.com"],
+    )
+    other = gcal.Event(
+        id="other",
+        title="פגישה עם מישהו אחר",
+        calendar="ראשי",
+        start=datetime(2026, 11, 20, 10, 0, tzinfo=IL),
+        emails=["someone@example.com"],
+    )
+    _past(monkeypatch, [older, newer, other])
+    found = gcal.last_meeting_with(
+        db, {"naor@example.com"}, datetime(2026, 11, 25, 9, 0, tzinfo=IL)
+    )
+    assert found is not None and found.id == "new"
+
+
+def test_a_meeting_in_the_future_is_not_the_previous_one(db, monkeypatch):
+    """⚠️ אחרת פגישה שנקבעה מאוחר יותר באותו שבוע הייתה "הפעם הקודמת"."""
+    ahead = gcal.Event(
+        id="ahead",
+        title="פגישה",
+        calendar="ראשי",
+        start=datetime(2026, 11, 28, 10, 0, tzinfo=IL),
+        emails=["naor@example.com"],
+    )
+    _past(monkeypatch, [ahead])
+    assert (
+        gcal.last_meeting_with(
+            db, {"naor@example.com"}, datetime(2026, 11, 25, 9, 0, tzinfo=IL)
+        )
+        is None
+    )
+
+
+def test_an_all_day_event_is_not_a_previous_meeting(db, monkeypatch):
+    whole = gcal.Event(
+        id="all",
+        title="חופשה",
+        calendar="ראשי",
+        all_day=True,
+        day=date(2026, 11, 10),
+        emails=["naor@example.com"],
+    )
+    _past(monkeypatch, [whole])
+    assert (
+        gcal.last_meeting_with(
+            db, {"naor@example.com"}, datetime(2026, 11, 25, 9, 0, tzinfo=IL)
+        )
+        is None
+    )
+
+
+def test_no_addresses_means_no_lookup_at_all(db, monkeypatch):
+    def explode(*args, **kwargs):  # pragma: no cover - אמור לא להיקרא
+        raise AssertionError("בלי כתובת אין מה לחפש")
+
+    monkeypatch.setattr(gcal, "window", explode)
+    assert gcal.last_meeting_with(db, set(), datetime(2026, 11, 25, 9, 0, tzinfo=IL)) is None
