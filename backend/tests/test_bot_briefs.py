@@ -173,11 +173,19 @@ def test_many_tasks_are_counted_and_not_all_listed(db, connected):
 
 
 def test_a_closed_task_is_not_listed_as_open(db, connected):
+    """⚠️ ומשימה סגורה לבדה אינה "מה לומר": אין תדריך בכלל."""
     owner = client(db)
     task(db, owner, "נסגרה", status="done", done=datetime.now(tz=IL))
+    assert briefs.compose(db, soon(), owner, None) == ""
+
+
+def test_with_something_else_to_say_the_brief_states_there_is_nothing_open(db, connected):
+    """כשיש הערה בכרטיס, התדריך יוצא — ואומר במפורש שאין משימות פתוחות."""
+    owner = client(db, notes="משלם בשוטף פלוס 60")
+    task(db, owner, "נסגרה", status="done", done=datetime.now(tz=IL))
     text = briefs.compose(db, soon(), owner, None)
-    assert "נסגרה" not in text
     assert "אין משימות פתוחות" in text
+    assert "נסגרה" not in text
 
 
 def test_a_task_of_another_client_does_not_leak_in(db, connected):
