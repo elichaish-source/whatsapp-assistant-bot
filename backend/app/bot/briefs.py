@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from email.utils import parseaddr
 
 from sqlalchemy import select
@@ -94,11 +94,23 @@ def _by_title(db: Session, event: gcal.Event) -> Client | None:
     לבטוח: הוא יכול רק להפוך "לא נמצא" ל"נמצא", ולא לדרוס זיהוי טוב
     יותר. אותו דפוס סבבים של ``_find_open`` ב-2ג2א.
 
-    ⚠️ **ולמה הוא נחוץ:** מול היומן האמיתי רק 5 מתוך 17 הפגישות היו עם
-    משתתפים. בלי הסבב הזה התדריך היה קיים כמעט רק לפגישות שהבוט עצמו
-    קבע. ⚠️ **נדרשת התאמה מלאה של כל מילות שם הלקוח**, ולא מילה אחת,
+    ⚠️ **נדרשת התאמה מלאה של כל מילות שם הלקוח**, ולא מילה אחת,
     ו**מינימום ארבע אותיות לשם** — אחרת "בנק" או "ברק" היו מתאימים
     לחצי היומן.
+
+    ⚠️⚠️ **נמדד מול היומן האמיתי (25.11.2026): הסבב הזה תפס אפס.**
+    מתוך 18 אירועים בשבוע זוהה לקוח ב-**אחד**, לפי כתובת. הסיבה אינה
+    כלל ההתאמה אלא ש**היומן וכרטיסי הלקוחות כמעט אינם נחתכים**: כותרת
+    טיפוסית היא "פגישה שבועית - ביודנט" או "דן אלנקווה", ואלה אינם
+    לקוחות במסד כלל, ורק פגישה אחת נשאה כתובת של משתתף.
+
+    ⚠️⚠️ **והרפיית הכלל נבדקה ונדחתה.** כלל של "מילה אחת משם הלקוח,
+    באורך 4 ומעלה" היה מוסיף שניים — ואחד מהם דו-משמעי — אבל מילות
+    הזיהוי של הלקוחות האמיתיים כוללות ``עמותת``, ``חוות``, ``בנייה``,
+    ``הפקות``, ``השקעות``, ``פיננסים`` ו``סטודיו``. מילה גנרית כזאת
+    הייתה מתאימה לכל כותרת שמכילה אותה, כלומר **תדריך על הלקוח הלא
+    נכון** — וזה גרוע מאין תדריך. **מה שיעלה את הכיסוי הוא כתובת מייל
+    בכרטיס הלקוח וזימון שלו לפגישה, ולא מתאים חכם יותר.**
     """
     words = name_words(event.title)
     if not words:
@@ -156,6 +168,24 @@ def _facts(db: Session, client_id: int) -> list[str]:
     return [" ".join((fact.content or "").split()) for fact in rows if fact.content]
 
 
+def _due(task: Task, meeting_day: date) -> str:
+    """תאריך היעד של המשימה, ו**האם הוא עבר**.
+
+    ⚠️⚠️ **נמצא מול הנתונים האמיתיים ב-25.11.2026:** התדריך הראה
+    "עד 19/11" על פגישה ב-25/11, כלומר הציג איחור של שישה ימים כאילו
+    הוא יעד עתידי. בתזכורות יש כבר "— עבר התאריך" מאותה סיבה בדיוק.
+
+    ⚠️ **ההשוואה היא מול יום הפגישה ולא מול ``now()``**: מה שמעניין הוא
+    אם המשימה באיחור **כשנכנסים לפגישה**, וזה גם מה שהופך את הבדיקה
+    לדטרמיניסטית — אותו לקח של "גם שעה קבועה היא תאריך קבוע".
+    """
+    if task.due_date is None:
+        return ""
+    if task.due_date < meeting_day:
+        return f" (באיחור מ-{task.due_date:%d/%m})"
+    return f" (עד {task.due_date:%d/%m})"
+
+
 def compose(
     db: Session, event: gcal.Event, client: Client, previous: gcal.Event | None
 ) -> str:
@@ -177,8 +207,7 @@ def compose(
     if tasks:
         lines.append(f"פתוח מולו: {len(tasks)}")
         for task in tasks[:MAX_TASKS]:
-            due = f" (עד {task.due_date:%d/%m})" if task.due_date else ""
-            lines.append(f"• {task.title}{due}")
+            lines.append(f"• {task.title}{_due(task, event.start.date())}")
         if len(tasks) > MAX_TASKS:
             lines.append(f"• ועוד {len(tasks) - MAX_TASKS}")
     else:
