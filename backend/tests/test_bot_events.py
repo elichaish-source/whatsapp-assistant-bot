@@ -7,6 +7,7 @@
 הפריסה: בחירת הפעולה על ידי המודל, ושהסכימה החדשה עוברת את ה-API.
 """
 
+import json
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -16,7 +17,7 @@ from sqlalchemy import select
 from app import gauth, gcal
 from app.bot import actions, events
 from app.bot.intent import Intent
-from app.models import BotMessage, Task
+from app.models import BotMessage, Client, Task
 
 IL = ZoneInfo("Asia/Jerusalem")
 
@@ -297,3 +298,297 @@ def test_an_event_from_the_primary_calendar_is_not_marked(db, connected, monkeyp
     monkeypatch.setattr(gcal, "agenda", lambda session, scope: [event(9, "פגישה")])
     reply = run(db).reply
     assert "(" not in reply
+
+
+# --- קביעת פגישה דרך הבוט (4ב-2) ---
+
+
+@pytest.fixture
+def made(monkeypatch):
+    """תופס את היצירה והמחיקה, בלי אף פנייה לגוגל."""
+    log: dict = {"created": [], "deleted": [], "exists": True}
+
+    def create(session, title, begins, ends, attendees=None):
+        guests = [a for a in (attendees or []) if a]
+        log["created"].append(
+            {"title": title, "begins": begins, "ends": ends, "guests": guests}
+        )
+        return gcal.Created(id=f"ev-{len(log['created'])}", invited=bool(guests))
+
+    def delete(session, event_id, invited=False):
+        log["deleted"].append({"id": event_id, "invited": invited})
+        return log["exists"]
+
+    monkeypatch.setattr(gcal, "create", create)
+    monkeypatch.setattr(gcal, "delete_event", delete)
+    monkeypatch.setattr(gcal, "conflicts", lambda session, begins, ends: [])
+    monkeypatch.setattr(gcal, "next_free", lambda session, after, minutes, days=7: None)
+    return log
+
+
+def at(hour: int = 10, minute: int = 0, days: int = 1) -> str:
+    """⚠️ זמן ביחס להיום, כי התשובה אומרת "מחר" ושם יום."""
+    day = datetime.now(tz=IL).date() + timedelta(days=days)
+    return f"{day.isoformat()}T{hour:02d}:{minute:02d}"
+
+
+def book(db, **extra) -> actions.Outcome:
+    fields = {"action": "add_event", "title": "פגישה עם דני", "event_at": at()}
+    fields.update(extra)
+    return actions.execute(db, Intent(**fields))
+
+
+def test_a_meeting_is_booked_immediately(db, connected, made):
+    """⚠️ ההכרעה: קובעים מיד, בלי אישור מראש. אירוע ביומן הפיך לגמרי."""
+    outcome = book(db)
+    assert len(made["created"]) == 1
+    assert made["created"][0]["title"] == "פגישה עם דני"
+    assert "נקבע" in outcome.reply
+    assert outcome.pending is None
+
+
+def test_the_default_length_is_an_hour(db, connected, made):
+    """⚠️ נגזר מהיומן האמיתי: 11 מתוך 17 הפגישות הן בנות שעה."""
+    book(db)
+    first = made["created"][0]
+    assert (first["ends"] - first["begins"]) == timedelta(minutes=60)
+
+
+def test_a_length_the_user_gave_is_used(db, connected, made):
+    book(db, event_minutes=30)
+    first = made["created"][0]
+    assert (first["ends"] - first["begins"]) == timedelta(minutes=30)
+
+
+def test_a_booking_can_be_undone(db, connected, made):
+    """⚠️ זה מה שמצדיק לקבוע בלי אישור: יש ביטול אמיתי."""
+    outcome = book(db)
+    assert outcome.undo == {"kind": "created_event", "event_id": "ev-1", "invited": False}
+
+
+def test_without_a_time_nothing_is_booked(db, connected, made):
+    """⚠️ זמן שאינו זמן יורד ואינו מנוחש.
+
+    פגישה שנקבעה לזמן הלא נכון בלי שמישהו שם לב גרועה מפגישה שלא נקבעה.
+    """
+    for value in ("", "מחר", "2026-13-45T10:00", "2026-11-26"):
+        outcome = book(db, event_at=value)
+        assert "לא הבנתי מתי" in outcome.reply, value
+    assert made["created"] == []
+
+
+def test_without_a_title_nothing_is_booked(db, connected, made):
+    outcome = book(db, title="")
+    assert "לא הבנתי על מה" in outcome.reply
+    assert made["created"] == []
+
+
+# --- התנגשות ---
+
+
+def test_a_clash_asks_instead_of_booking(db, connected, made, monkeypatch):
+    """⚠️ התנגשות אינה שגיאה אלא שאלה: אומר מה תפוס ומציע חלון פנוי."""
+    day = datetime.now(tz=IL).date() + timedelta(days=1)
+    busy_from = datetime.combine(day, datetime.min.time(), tzinfo=IL).replace(hour=10)
+    monkeypatch.setattr(
+        gcal,
+        "conflicts",
+        lambda session, begins, ends: [(busy_from, busy_from + timedelta(hours=1))],
+    )
+    monkeypatch.setattr(
+        gcal,
+        "next_free",
+        lambda session, after, minutes, days=7: busy_from + timedelta(hours=2),
+    )
+    outcome = book(db)
+    assert made["created"] == []
+    assert "תפוס" in outcome.reply
+    assert "10:00–11:00" in outcome.reply
+    assert "12:00" in outcome.reply
+
+
+def test_a_clash_with_no_free_slot_says_so(db, connected, made, monkeypatch):
+    day = datetime.now(tz=IL).date() + timedelta(days=1)
+    busy_from = datetime.combine(day, datetime.min.time(), tzinfo=IL).replace(hour=10)
+    monkeypatch.setattr(
+        gcal,
+        "conflicts",
+        lambda session, begins, ends: [(busy_from, busy_from + timedelta(hours=1))],
+    )
+    outcome = book(db)
+    assert made["created"] == []
+    assert "לא מצאתי חלון פנוי" in outcome.reply
+
+
+# --- זימון: הגבול היחיד כאן שאינו הפיך ---
+
+
+def test_inviting_a_client_asks_first_and_books_nothing(db, connected, made):
+    """⚠️⚠️ **רק כאן יש אישור מראש.** ההזמנה שגוגל שולחת אינה הפיכה."""
+    db.add(Client(name="דני כהן", email="dani@example.com"))
+    db.flush()
+    outcome = book(db, event_with="דני")
+    assert made["created"] == []
+    assert outcome.pending is not None
+    assert outcome.pending["kind"] == "add_event"
+    assert outcome.pending["data"]["guest"] == "dani@example.com"
+    assert "אי אפשר להחזיר" in outcome.reply
+    db.rollback()
+
+
+def test_the_invitation_goes_out_only_after_yes(db, connected, made):
+    """⚠️⚠️ האישור נקרא מ-``pending_json`` של ההודעה הקודמת, לא מהמודל."""
+    db.add(Client(name="דני כהן", email="dani@example.com"))
+    db.flush()
+    asked = book(db, event_with="דני")
+
+    row = BotMessage(wa_message_id="wa-ev-1", body="תקבע פגישה עם דני מחר ב-10")
+    row.pending_json = json.dumps(asked.pending)
+    db.add(row)
+    db.flush()
+    after = BotMessage(wa_message_id="wa-ev-2", body="כן")
+    db.add(after)
+    db.flush()
+
+    outcome = actions.execute(db, Intent(action="confirm"), before_id=after.id)
+    assert len(made["created"]) == 1
+    assert made["created"][0]["guests"] == ["dani@example.com"]
+    assert "הזמנה נשלחה" in outcome.reply
+    db.rollback()
+
+
+def test_no_means_no_invitation_and_no_event(db, connected, made):
+    db.add(Client(name="דני כהן", email="dani@example.com"))
+    db.flush()
+    asked = book(db, event_with="דני")
+    row = BotMessage(wa_message_id="wa-ev-3", body="תקבע")
+    row.pending_json = json.dumps(asked.pending)
+    db.add(row)
+    db.flush()
+    after = BotMessage(wa_message_id="wa-ev-4", body="לא")
+    db.add(after)
+    db.flush()
+
+    outcome = actions.execute(db, Intent(action="decline"), before_id=after.id)
+    assert made["created"] == []
+    assert "לא שלחתי הזמנה" in outcome.reply
+    db.rollback()
+
+
+def test_a_guest_with_no_card_is_not_invited_and_it_is_said(db, connected, made):
+    """⚠️ אין התאמה בכרטיס — אין זימון, והבוט אומר זאת במקום לנחש כתובת."""
+    outcome = book(db, event_with="מישהו שלא קיים")
+    # הפגישה כן נקבעה: לא לקבוע בכלל היה מעניש על חוסר נתון
+    assert len(made["created"]) == 1
+    assert made["created"][0]["guests"] == []
+    assert "לא זימנתי" in outcome.reply
+    assert "אין לו כתובת מייל" in outcome.reply
+
+
+def test_a_client_without_an_email_is_not_invited(db, connected, made):
+    db.add(Client(name="דני כהן"))
+    db.flush()
+    outcome = book(db, event_with="דני כהן")
+    assert made["created"][0]["guests"] == []
+    assert "לא זימנתי" in outcome.reply
+    db.rollback()
+
+
+def test_several_matching_clients_are_asked_about_and_nothing_is_booked(db, connected, made):
+    """⚠️ כמה התאמות — שואל ואינו בוחר, כמו ``update_task``.
+
+    בחירה שקטה בין שניים הייתה שולחת הזמנה לאדם הלא נכון, וזה אינו הפיך.
+    """
+    db.add(Client(name="דני", email="dani1@example.com"))
+    db.add(Client(name="דני כהן", email="dani2@example.com"))
+    db.flush()
+    outcome = book(db, event_with="דני")
+    assert made["created"] == []
+    assert outcome.pending is None
+    assert "על מי מהם" in outcome.reply
+    db.rollback()
+
+
+# --- "בטל" ---
+
+
+def test_cancel_removes_the_event_from_the_calendar(db, connected, made):
+    outcome = book(db)
+    row = BotMessage(wa_message_id="wa-ev-5", body="תקבע", intent="add_event")
+    row.undo_json = json.dumps(outcome.undo)
+    db.add(row)
+    db.flush()
+
+    cancelled = actions.execute(db, Intent(action="cancel_last"))
+    assert made["deleted"] == [{"id": "ev-1", "invited": False}]
+    assert "בוטלה" in cancelled.reply
+    db.rollback()
+
+
+def test_cancelling_an_invited_event_says_the_invitation_stays(db, connected, made):
+    """⚠️ ההזמנה אינה נמחקת מהתיבה של הנמען, והתשובה אומרת זאת."""
+    row = BotMessage(wa_message_id="wa-ev-6", body="כן", intent="confirm")
+    row.undo_json = json.dumps(
+        {"kind": "created_event", "event_id": "ev-9", "invited": True}
+    )
+    db.add(row)
+    db.flush()
+
+    cancelled = actions.execute(db, Intent(action="cancel_last"))
+    assert made["deleted"] == [{"id": "ev-9", "invited": True}]
+    assert "נשארת בתיבה של הנמען" in cancelled.reply
+    db.rollback()
+
+
+def test_a_second_cancel_does_not_go_further_back(db, connected, made):
+    """⚠️ מסמנים ולא מרוקנים, כמו ב-entities: אחרת "בטל" שני היה מוחק
+    משהו אחר לגמרי."""
+    outcome = book(db)
+    row = BotMessage(wa_message_id="wa-ev-7", body="תקבע", intent="add_event")
+    row.undo_json = json.dumps(outcome.undo)
+    db.add(row)
+    db.flush()
+
+    actions.execute(db, Intent(action="cancel_last"))
+    again = actions.execute(db, Intent(action="cancel_last"))
+    assert len(made["deleted"]) == 1
+    assert "כבר בוטל" in again.reply
+    db.rollback()
+
+
+def test_cancelling_an_event_already_deleted_in_google_is_not_an_error(db, connected, made):
+    made["exists"] = False
+    row = BotMessage(wa_message_id="wa-ev-8", body="תקבע", intent="add_event")
+    row.undo_json = json.dumps(
+        {"kind": "created_event", "event_id": "ev-gone", "invited": False}
+    )
+    db.add(row)
+    db.flush()
+
+    cancelled = actions.execute(db, Intent(action="cancel_last"))
+    assert "כבר לא ביומן" in cancelled.reply
+    db.rollback()
+
+
+# --- מה שהפעולה אינה עושה ---
+
+
+def test_booking_a_meeting_creates_no_task(db, connected, made):
+    """⚠️ פגישה היא ביומן, ולא משימה. אין שורה חדשה בטבלת המשימות."""
+    book(db)
+    db.flush()
+    assert db.scalars(select(Task)).all() == []
+
+
+def test_a_failure_in_google_does_not_claim_the_meeting_was_booked(db, connected, monkeypatch):
+    """⚠️ "נקבע" שנאמר על פגישה שלא נקבעה הוא הכשל הגרוע כאן."""
+
+    def broken(session, title, begins, ends, attendees=None):
+        raise gcal.CalendarError("timeout")
+
+    monkeypatch.setattr(gcal, "create", broken)
+    monkeypatch.setattr(gcal, "conflicts", lambda session, begins, ends: [])
+    outcome = book(db)
+    assert "נקבע" not in outcome.reply
+    assert "לא הצלחתי" in outcome.reply
+    assert outcome.undo is None
