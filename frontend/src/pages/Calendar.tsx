@@ -487,7 +487,10 @@ export default function Calendar() {
                     : formatTime(open.start!)}
               </span>
               <span>{openDay && `יום ${dayName(openDay)}, ${label(openDay)}`}</span>
-              <span className="pill">{open.calendar}</span>
+              {/* ⚠️ שם היומן רק כשאינו הראשי, בדיוק כמו בלוח וברשימה.
+                  על היומן הראשי התווית הייתה כתובת המייל של המשתמש —
+                  כלומר רעש שנראה כמו מידע, ונתפס באימות של 26.11.2026 */}
+              {!open.from_primary && <span className="pill">{open.calendar}</span>}
             </div>
             {open.location && (
               <p>
