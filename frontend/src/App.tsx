@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./api";
 import { LookupsProvider } from "./lookups";
+import Calendar from "./pages/Calendar";
 import ClientDetail from "./pages/ClientDetail";
 import Clients from "./pages/Clients";
 import ComingSoon from "./pages/ComingSoon";
@@ -21,6 +22,7 @@ const NAV = [
   { to: "/memory", label: "זיכרון" },
   { to: "/finance", label: "כספים", soon: true },
   { to: "/mail", label: "מיילים" },
+  { to: "/calendar", label: "יומן" },
   { to: "/whatsapp", label: "וואטסאפ", soon: true },
   { to: "/vault", label: "כספת", soon: true },
   { to: "/settings", label: "הגדרות" },
@@ -77,6 +79,7 @@ export default function App() {
             <Route path="/recurring" element={<Recurring />} />
             <Route path="/memory" element={<Memory />} />
             <Route path="/mail" element={<Mail />} />
+            <Route path="/calendar" element={<Calendar />} />
             <Route path="/settings" element={<Settings />} />
             {NAV.filter((n) => n.soon).map((n) => (
               <Route key={n.to} path={n.to} element={<ComingSoon title={n.label} />} />

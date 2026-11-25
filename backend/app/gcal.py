@@ -62,6 +62,14 @@ GENERATED_SUFFIX = "@group.v.calendar.google.com"
 # הזה לבדו מוציא את מה שאינו של המשתמש.
 OWNED = ("owner",)
 
+# ⚠️⚠️ **מה שהמסך קורא, והוא רחב יותר מהבוט בכוונה** (הוכרע 25.11.2026,
+# ב-4ב-4). חדר הישיבות והחגים מגיעים בהרשאת ``reader``, ובתשובה היומית
+# של הבוט הם היו רעש — חג מוסיף שורה כמעט כל שבוע. **בלוח שבועי הם
+# דווקא הקשר:** "חמישי חג" ו"החדר תפוס ב-14:00" הם בדיוק מה שמסתכלים
+# עליו כשמתכננים. ⚠️ ``CALENDAR_SKIP`` ממשיך לחול גם כאן, ולכן יומן
+# "משימות" נשאר בחוץ בשני המסלולים.
+READABLE = ("owner", "writer", "reader")
+
 # ⚠️ **אירוע נוצר ביומן הראשי בלבד.** קביעה ביומן המשפחתי לא הוכרעה,
 # וחדר הישיבות אינו של המשתמש כלל (הרשאת reader)
 PRIMARY = "primary"
@@ -114,6 +122,10 @@ class Event:
     id: str
     title: str
     calendar: str
+    # ⚠️ **מזהה היומן, לא השם.** נוסף ב-4ב-4 כדי שהמסך יצבע אירוע לפי
+    # היומן שלו: שם יומן הוא טקסט שהמשתמש יכול לשנות בגוגל, והמזהה הוא
+    # המפתח היציב. ‏הבוט אינו משתמש בו, והוא אינו מוצג לעולם
+    calendar_id: str = ""
     # ⚠️ **האם האירוע מהיומן הראשי.** נחוץ כי ההכרעה של 24.11.2026 היא
     # לקרוא גם את היומן המשפחתי — ואירוע משפחתי שמופיע בלי סימון נראה
     # כמו פגישת עבודה. "פגישה ב-20:00" בלי הסימון הזה הוא שאלה, לא תשובה
@@ -144,6 +156,16 @@ class Event:
 
 def local_tz() -> ZoneInfo:
     return ZoneInfo(get_settings().timezone)
+
+
+def today_local() -> date:
+    """איזה יום היום בשעון של ההתקנה.
+
+    ⚠️ **נקבע בשרת ולא בדפדפן.** המסך מדגיש את עמודת היום, ודפדפן
+    באזור זמן אחר היה מדגיש את העמודה הלא נכונה — שגיאה שקטה שאי אפשר
+    לראות בבדיקה מקומית, כי המחשב במשרד יושב באותו אזור זמן.
+    """
+    return datetime.now(tz=local_tz()).date()
 
 
 def skipped() -> set[str]:
@@ -221,22 +243,30 @@ def client_names(db: Session) -> dict[str, str]:
     return found
 
 
-def calendars(db: Session) -> list[Calendar]:
-    """היומנים שנקראים: בבעלות המשתמש, פחות מה שהוחרג ב-.env.
+def calendars(db: Session, owned_only: bool = True) -> list[Calendar]:
+    """היומנים שנקראים, פחות מה שהוחרג ב-.env.
 
-    ⚠️ **יומן בהרשאת reader אינו נכלל** — חדר הישיבות אינו שלו, ויומן
-    החגים היה מוסיף שורה כמעט כל שבוע לתשובה היומית.
+    ⚠️ **ברירת המחדל היא מה שהבוט קורא: בבעלות המשתמש בלבד.** יומן
+    בהרשאת reader אינו נכלל — חדר הישיבות אינו שלו, ויומן החגים היה
+    מוסיף שורה כמעט כל שבוע לתשובה היומית.
+
+    ⚠️⚠️ **``owned_only=False`` הוא המסך ולא הבוט** (4ב-4). הוא מרחיב
+    ל-``READABLE`` וגם מבטל את ההחרגה של יומני גוגל המיוצרים, כי יומן
+    החגים **הוא** אחד מהם. הברירה נשארה ברירת מחדל ולא נהפכה, כדי
+    שהתנהגות הבוט שאומתה מול היומן האמיתי ב-25.11 לא תשתנה בשקט —
+    אותו שיקול שכתב את ``window`` עם טווח במקום ``scope``.
     """
     data = _request(gauth.access_token(db), "users/me/calendarList")
     skip = skipped()
+    allowed = OWNED if owned_only else READABLE
     found: list[Calendar] = []
     for item in data.get("items") or []:
         cal_id = item.get("id") or ""
         if not cal_id or cal_id in skip:
             continue
-        if item.get("accessRole") not in OWNED:
+        if item.get("accessRole") not in allowed:
             continue
-        if cal_id.endswith(GENERATED_SUFFIX):
+        if owned_only and cal_id.endswith(GENERATED_SUFFIX):
             continue
         found.append(
             Calendar(
@@ -250,7 +280,9 @@ def calendars(db: Session) -> list[Calendar]:
     return found
 
 
-def _parse(raw: dict, calendar_name: str, from_primary: bool = True) -> Event | None:
+def _parse(
+    raw: dict, calendar_name: str, from_primary: bool = True, calendar_id: str = ""
+) -> Event | None:
     """ממיר אירוע של גוגל ל-``Event``. מחזיר None למה שאין מה להציג בו."""
     start, end = raw.get("start") or {}, raw.get("end") or {}
     title = (raw.get("summary") or "").strip() or "(בלי כותרת)"
@@ -276,6 +308,7 @@ def _parse(raw: dict, calendar_name: str, from_primary: bool = True) -> Event | 
         "id": raw.get("id") or "",
         "title": title,
         "calendar": calendar_name,
+        "calendar_id": calendar_id,
         "from_primary": from_primary,
         "location": (raw.get("location") or "").strip(),
         "attendees": attendees,
@@ -319,7 +352,7 @@ def _events(token: str, cal: Calendar, begins: datetime, ends: datetime) -> list
             "maxResults": PAGE,
         },
     )
-    found = [_parse(raw, cal.name, cal.primary) for raw in data.get("items") or []]
+    found = [_parse(raw, cal.name, cal.primary, cal.id) for raw in data.get("items") or []]
     return [event for event in found if event is not None]
 
 
@@ -337,7 +370,9 @@ def span(scope: str, today: date | None = None) -> tuple[date, date]:
     return first, first
 
 
-def window(db: Session, begins: datetime, ends: datetime) -> list[Event]:
+def window(
+    db: Session, begins: datetime, ends: datetime, owned_only: bool = True
+) -> list[Event]:
     """מה יש בין שתי נקודות זמן, מכל היומנים שנקראים, ממוין לפי זמן.
 
     ⚠️ **קורא מכמה יומנים ולא רק מהראשי.** כרגע רק הראשי בשימוש בפועל,
@@ -348,8 +383,11 @@ def window(db: Session, begins: datetime, ends: datetime) -> list[Event]:
     ⚠️ **מקבל זמנים ולא ``scope``** (פוצל ב-4ב-3): התדריך צריך "מהרגע
     הזה ועד 45 דקות קדימה", וטווח כזה אינו יום ואינו שבוע. ``agenda``
     נשארה העטיפה שממירה ``scope`` לזמנים.
+
+    ⚠️ ``owned_only=False`` מוסיף את היומנים בהרשאת קריאה — המסך ולא
+    הבוט (4ב-4). עובר הלאה ל-``calendars`` ואינו משנה דבר אחר.
     """
-    cals = calendars(db)
+    cals = calendars(db, owned_only)
     if not cals:
         return []
 
@@ -382,6 +420,27 @@ def agenda(db: Session, scope: str = "today") -> list[Event]:
         db,
         datetime.combine(first, time.min, tzinfo=tz),
         datetime.combine(last + timedelta(days=1), time.min, tzinfo=tz),
+    )
+
+
+def day_range(db: Session, first: date, days: int, owned_only: bool = True) -> list[Event]:
+    """האירועים ב-``days`` ימים שמתחילים ב-``first``, לפי שעון מקומי.
+
+    ⚠️ **מקבל תאריך התחלה ולא ``scope``, וזה מה שהמסך צריך.** הבוט עונה
+    על "היום" ו"מחר", ואילו לוח שבועי צריך לדפדף אחורה וקדימה — שבוע
+    שאינו השבוע הזה אינו ``scope`` כלל. ``agenda`` נשארה כפי שהייתה,
+    ולכן התנהגות הבוט שאומתה מול היומן האמיתי אינה נוגעת בזה.
+
+    ⚠️ **גבולות היום נבנים כ-``datetime`` ולא מחושבים משעות.** זה אותו
+    לקח שנרשם ב-4ב-2, כשבדיקה על ``finish.hour`` הפכה 23:00 לחלון פנוי:
+    יום נגמר בחצות של **היום הבא**, ולא בשעה 24 של היום הזה.
+    """
+    tz = local_tz()
+    return window(
+        db,
+        datetime.combine(first, time.min, tzinfo=tz),
+        datetime.combine(first + timedelta(days=days), time.min, tzinfo=tz),
+        owned_only,
     )
 
 
