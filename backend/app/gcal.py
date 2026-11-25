@@ -198,7 +198,11 @@ def _parse(raw: dict, calendar_name: str, from_primary: bool = True) -> Event | 
     start, end = raw.get("start") or {}, raw.get("end") or {}
     title = (raw.get("summary") or "").strip() or "(בלי כותרת)"
     attendees = [
-        person.get("email", "")
+        # ⚠️ **השם קודם לכתובת.** התגלה בפלט האמיתי ב-25.11.2026: התשובה
+        # הציגה את כתובת המייל של המשתתף במקום את שמו. כתובת גולמית היא
+        # פחות קריאה **ופחות שימושית** — צריך לפענח אותה בראש כדי לדעת
+        # עם מי הפגישה, וזה בדיוק מה שהשורה אמורה לחסוך
+        (person.get("displayName") or "").strip() or person.get("email", "")
         for person in raw.get("attendees") or []
         # ⚠️ המשתמש עצמו אינו "משתתף" בעיני המשתמש. בלי הסינון הזה כל
         # פגישה שהוא ארגן הייתה מוצגת כאילו יש בה אדם אחד יותר

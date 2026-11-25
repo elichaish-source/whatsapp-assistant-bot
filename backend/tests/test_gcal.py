@@ -387,3 +387,23 @@ def test_an_event_knows_whether_its_calendar_is_the_primary_one(monkeypatch):
         datetime(2026, 11, 26, tzinfo=IL),
     )
     assert from_main[0].from_primary is True
+
+
+def test_an_attendee_is_shown_by_name_when_google_has_one():
+    """⚠️ התגלה בפלט האמיתי ב-25.11.2026.
+
+    התשובה הציגה את כתובת המייל של המשתתף במקום את שמו. כתובת גולמית
+    היא פחות קריאה ופחות שימושית — צריך לפענח אותה בראש.
+    """
+    raw = timed(
+        "2026-11-25T07:30:00Z",
+        attendees=[
+            {"email": "a@example.com", "displayName": "דני כהן"},
+            {"email": "noname@example.com"},
+            {"email": "blank@example.com", "displayName": "   "},
+        ],
+    )
+    event = gcal._parse(raw, "ראשי")
+    assert event is not None
+    # שם כשיש, וכתובת כשאין — ולא שורה ריקה
+    assert event.attendees == ["דני כהן", "noname@example.com", "blank@example.com"]
