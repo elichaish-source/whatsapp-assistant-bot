@@ -62,9 +62,34 @@ GENERATED_SUFFIX = "@group.v.calendar.google.com"
 # הזה לבדו מוציא את מה שאינו של המשתמש.
 OWNED = ("owner",)
 
+# ⚠️ **אירוע נוצר ביומן הראשי בלבד.** קביעה ביומן המשפחתי לא הוכרעה,
+# וחדר הישיבות אינו של המשתמש כלל (הרשאת reader)
+PRIMARY = "primary"
+
+# אורך פגישה כשהמשתמש לא אמר. ⚠️ **נגזר מהיומן האמיתי ולא מניחוש:**
+# 11 מתוך 17 הפגישות בשבוע שנמדד הן בנות שעה
+DEFAULT_MINUTES = 60
+
+# ⚠️ הגבולות של "חלון פנוי סביר". חלון בשתיים לפנות בוקר הוא תשובה
+# נכונה טכנית וחסרת תועלת, ולכן ההצעה מוגבלת לשעות שבהן באמת עובדים
+DAY_START = 8
+DAY_END = 19
+# ברזולוציה של רבע שעה, כדי לא להציע "10:07"
+SLOT_MINUTES = 15
+# ‏``weekday()`` מחזיר 5 לשבת. הצעה לקבוע בשבת אינה הצעה
+SATURDAY = 5
+
 
 class CalendarError(Exception):
     """היומן לא נגיש כרגע: רשת, או תשובה לא צפויה מגוגל."""
+
+
+@dataclass
+class Created:
+    """האירוע שנוצר. ⚠️ ``invited`` קובע אם "בטל" ישלח הודעת ביטול."""
+
+    id: str
+    invited: bool = False
 
 
 @dataclass
@@ -332,3 +357,179 @@ def agenda(db: Session, scope: str = "today") -> list[Event]:
     # אירוע של כל היום ראשון באותו תאריך, ואחריו לפי שעה
     found.sort(key=lambda event: (event.when, not event.all_day, event.start or begins))
     return found
+
+
+# --- בדיקת התנגשות ---
+#
+# ⚠️ ``freeBusy`` הוא POST שאינו כותב דבר: הוא מקבל טווח ורשימת יומנים
+# ומחזיר טווחי "תפוס" בלבד, **בלי כותרות ובלי משתתפים**. הוא עובד עם
+# ``calendar.readonly`` שכבר מאושרת, ולכן בדיקת התנגשות אינה פיצ'ר נפרד
+# אלא חלק מהקביעה — אין סיבה לקבוע פגישה בלי לבדוק.
+
+
+def busy(db: Session, begins: datetime, ends: datetime) -> list[tuple[datetime, datetime]]:
+    """טווחי "תפוס" בכל היומנים שנקראים, ממוינים לפי זמן."""
+    cals = calendars(db)
+    if not cals:
+        return []
+    token = gauth.access_token(db)
+    try:
+        response = httpx.post(
+            f"{API}/freeBusy",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "timeMin": begins.isoformat(),
+                "timeMax": ends.isoformat(),
+                "items": [{"id": cal.id} for cal in cals],
+            },
+            timeout=TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise CalendarError(f"הפנייה ליומן נכשלה: {exc}") from exc
+    if response.status_code >= 400:
+        log.warning("גוגל החזירה %s על freeBusy", response.status_code)
+        raise CalendarError(f"גוגל החזירה {response.status_code}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise CalendarError("תשובה לא תקינה מגוגל") from exc
+
+    tz = local_tz()
+    found: list[tuple[datetime, datetime]] = []
+    for entry in (data.get("calendars") or {}).values():
+        for slot in entry.get("busy") or []:
+            try:
+                start = datetime.fromisoformat(slot["start"]).astimezone(tz)
+                end = datetime.fromisoformat(slot["end"]).astimezone(tz)
+            except (KeyError, ValueError):
+                continue
+            found.append((start, end))
+    found.sort()
+    return found
+
+
+def conflicts(db: Session, begins: datetime, ends: datetime) -> list[tuple[datetime, datetime]]:
+    """מה תפוס בתוך הטווח המבוקש.
+
+    ⚠️ **חפיפה ולא הכלה:** פגישה שמתחילה לפני ונגמרת בתוך הטווח היא
+    התנגשות בדיוק כמו אחת שיושבת בתוכו. ``start < ends and end > begins``
+    הוא התנאי היחיד שתופס את כל ארבעת המצבים.
+    """
+    return [(start, end) for start, end in busy(db, begins, ends) if start < ends and end > begins]
+
+
+def next_free(
+    db: Session, after: datetime, minutes: int, days: int = 7
+) -> datetime | None:
+    """ההתחלה הפנויה הבאה באורך המבוקש, בשעות שבהן כבר יש פגישות.
+
+    ⚠️ **מוגבל ל-``DAY_START``–``DAY_END``**: חלון פנוי בשתיים לפנות בוקר
+    הוא תשובה נכונה טכנית וחסרת תועלת. ⚠️ **ומדלג על שבת** — הצעה לקבוע
+    בשבת אינה הצעה.
+    """
+    tz = local_tz()
+    step = timedelta(minutes=SLOT_MINUTES)
+    length = timedelta(minutes=minutes)
+    limit = after + timedelta(days=days)
+    taken = busy(db, after, limit)
+
+    moment = after.astimezone(tz).replace(second=0, microsecond=0)
+    # מעגלים לרבע שעה הבאה, כדי לא להציע 10:07
+    extra = (-moment.minute) % SLOT_MINUTES
+    moment += timedelta(minutes=extra)
+
+    while moment < limit:
+        if moment.weekday() == SATURDAY or moment.hour < DAY_START:
+            moment = datetime.combine(
+                moment.date() + timedelta(days=1 if moment.hour >= DAY_START else 0),
+                time(hour=DAY_START),
+                tzinfo=tz,
+            )
+            if moment.weekday() == SATURDAY:
+                moment += timedelta(days=1)
+            continue
+        finish = moment + length
+        if finish.hour > DAY_END or (finish.hour == DAY_END and finish.minute):
+            moment = datetime.combine(
+                moment.date() + timedelta(days=1), time(hour=DAY_START), tzinfo=tz
+            )
+            continue
+        if not any(start < finish and end > moment for start, end in taken):
+            return moment
+        moment += step
+    return None
+
+
+# --- יצירה ומחיקה ---
+
+
+def create(
+    db: Session,
+    title: str,
+    begins: datetime,
+    ends: datetime,
+    attendees: list[str] | None = None,
+) -> Created:
+    """יוצר אירוע ביומן הראשי. ⚠️ מזמין משתתפים רק אם נמסרו במפורש.
+
+    ⚠️⚠️ **``sendUpdates`` הוא הגבול היחיד כאן שאינו הפיך.** כשיש
+    משתתפים גוגל שולחת מייל **בשם המשתמש**, ומחיקת האירוע לא מוציאה את
+    ההזמנה מהתיבה של הנמען. לכן ``"all"`` רק כשיש משתתפים, ו-``"none"``
+    אחרת — ויש בדיקה שאוכפת את שתי הצורות.
+
+    ⚠️ **האירוע נוצר ביומן הראשי בלבד.** קביעה ביומן המשפחתי או בחדר
+    הישיבות לא הוכרעה, וחדר הישיבות אינו של המשתמש בכלל (reader).
+    """
+    guests = [address for address in (attendees or []) if address]
+    body: dict = {
+        "summary": title,
+        "start": {"dateTime": begins.isoformat(), "timeZone": str(local_tz())},
+        "end": {"dateTime": ends.isoformat(), "timeZone": str(local_tz())},
+    }
+    if guests:
+        body["attendees"] = [{"email": address} for address in guests]
+
+    token = gauth.access_token(db)
+    try:
+        response = httpx.post(
+            f"{API}/{_path(PRIMARY)}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"sendUpdates": "all" if guests else "none"},
+            json=body,
+            timeout=TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise CalendarError(f"הפנייה ליומן נכשלה: {exc}") from exc
+    if response.status_code >= 400:
+        log.warning("יצירת אירוע נכשלה: %s", response.status_code)
+        raise CalendarError(f"גוגל החזירה {response.status_code}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise CalendarError("תשובה לא תקינה מגוגל") from exc
+    return Created(id=str(data.get("id") or ""), invited=bool(guests))
+
+
+def delete_event(db: Session, event_id: str, invited: bool = False) -> bool:
+    """מוחק אירוע שנוצר כאן. מחזיר False אם הוא כבר לא קיים.
+
+    ⚠️ **``sendUpdates="all"`` כשהיו משתתפים.** ההזמנה שיצאה אינה נמחקת
+    מהתיבה של הנמען, אבל הודעת ביטול כן מגיעה אליו וההזמנה מסומנת
+    כמבוטלת — זה הדבר הקרוב ביותר ל"בטל" שאפשר, ועדיף על שתיקה.
+    """
+    token = gauth.access_token(db)
+    try:
+        response = httpx.delete(
+            f"{API}/{_path(PRIMARY)}/{quote(event_id, safe='')}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"sendUpdates": "all" if invited else "none"},
+            timeout=TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise CalendarError(f"הפנייה ליומן נכשלה: {exc}") from exc
+    if response.status_code in (404, 410):
+        return False
+    if response.status_code >= 400:
+        log.warning("מחיקת אירוע נכשלה: %s", response.status_code)
+        raise CalendarError(f"גוגל החזירה {response.status_code}")
+    return True

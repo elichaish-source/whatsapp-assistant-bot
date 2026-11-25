@@ -723,6 +723,11 @@ def _confirm(db: Session, before_id: int | None) -> Outcome:
 
         return lists.confirmed(db, pending)
 
+    if pending.get("kind") == "add_event":
+        from . import events
+
+        return events.confirmed(db, pending)
+
     return Outcome("אין פעולה שמחכה לאישור.")
 
 
@@ -732,6 +737,9 @@ def _decline(db: Session, before_id: int | None) -> Outcome:
         return Outcome("בסדר.")
     if pending.get("kind") in ("add_client", "add_project", "add_domain", "add_task_type"):
         return Outcome("בסדר, לא יצרתי.")
+    if pending.get("kind") == "add_event":
+        # ⚠️ נאמר במפורש שההזמנה לא יצאה. זה כל מה שהאישור הזה הגן עליו
+        return Outcome("בסדר, לא קבעתי ולא שלחתי הזמנה.")
     return Outcome("בסדר, לא נגעתי.")
 
 
@@ -823,7 +831,9 @@ _LIST_ACTIONS = ("add_domain", "add_task_type", "pause_recurrence", "resume_recu
 _EMAIL_ACTIONS = ("list_emails", "search_emails", "show_email", "email_not_yet")
 # קריאה מהיומן. גם היא אינה נכללת ב-_UNDOABLE, מאותה סיבה: היא אינה
 # משנה דבר, ולכן "בטל" אחריה צריך להמשיך אחורה למה שכן שונה
-_EVENT_ACTIONS = ("list_events",)
+_EVENT_ACTIONS = ("list_events", "add_event")
+# ⚠️ ``add_event`` **כן** ניתן לביטול, ולכן הוא נכלל ב-_UNDOABLE למטה:
+# "בטל" מוחק את האירוע מהיומן. ``list_events`` אינו משנה דבר
 # confirm נכלל בגלל יצירה שאושרה ("ליצור בכל זאת?" ואז "כן"). מחיקה שאושרה
 # לא משאירה אחריה מה לבטל, ולכן השורה שלה לא נמצאת בחיפוש שלמטה
 _UNDOABLE = (
@@ -833,6 +843,7 @@ _UNDOABLE = (
     "update_task",
     "remember",
     "confirm",
+    "add_event",
     *_ENTITY_ACTIONS,
     *_LIST_ACTIONS,
 )
@@ -874,9 +885,12 @@ def _cancel_last(db: Session) -> Outcome:
     if row.undo_json:
         data = json.loads(row.undo_json)
         if data.get("kind"):
-            # לקוח או פרויקט. לעדכון משימה אין kind, והוא מטופל למטה
-            from . import entities, lists
+            # לקוח, פרויקט, תחום או אירוע ביומן. לעדכון משימה אין kind,
+            # והוא מטופל למטה
+            from . import entities, events, lists
 
+            if data["kind"] == "created_event":
+                return events.undo(db, row, data)
             if data["kind"] in lists.UNDO_KINDS:
                 return lists.undo(db, row, data)
             return entities.undo(db, row, data)

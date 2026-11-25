@@ -338,15 +338,18 @@ def test_a_session_is_never_used_inside_the_threads(db, monkeypatch):
 # --- מה לא נעשה כאן, ויש בדיקה שתשמור על זה ---
 
 
-def test_the_calendar_layer_never_writes(monkeypatch):
-    """⚠️ ‏4ב-1 היא קריאה בלבד: קביעה ושינוי הם 4ב-2.
+def test_the_calendar_layer_never_modifies_an_existing_event(monkeypatch):
+    """⚠️ ‏4ב-2 יוצרת ומוחקת, **ואינה משנה אירוע קיים.**
 
-    הבדיקה תיפול אם מישהו יוסיף כאן קריאת POST, PUT, PATCH או DELETE.
+    עד 4ב-1 הבדיקה הזאת אסרה כל כתיבה. היא נפתחה במכוון: ``freeBusy``
+    הוא POST שאינו כותב, ``events.insert`` הוא POST שכן, ו-``delete``
+    נחוץ ל"בטל". **מה שנשאר אסור הוא PATCH ו-PUT** — שינוי של אירוע
+    שהבוט לא יצר הוא 4ב-3 ואילך, ובלי הגדרה הוא עלול לדרוס פגישה.
     """
     source = (gcal.__file__ or "").replace(".pyc", ".py")
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    for verb in ("httpx.post", "httpx.put", "httpx.patch", "httpx.delete"):
+    for verb in ("httpx.put", "httpx.patch"):
         assert verb not in text, verb
 
 
@@ -451,3 +454,214 @@ def test_a_client_card_without_an_email_does_not_break_the_lookup(db):
     db.flush()
     assert gcal.client_names(db) == {}
     db.rollback()
+
+
+# --- יצירה: הגבול היחיד כאן שאינו הפיך ---
+
+
+def _posted(monkeypatch) -> dict:
+    """תופס את הקריאה ל-POST בלי לפנות לגוגל."""
+    seen: dict = {}
+
+    class Fake:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"id": "ev-1"}
+
+    def capture(url, headers=None, params=None, json=None, timeout=None):
+        seen.update({"url": url, "params": params or {}, "body": json or {}})
+        return Fake()
+
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(gcal.httpx, "post", capture)
+    return seen
+
+
+def test_an_event_without_guests_sends_no_invitation(db, monkeypatch):
+    """⚠️⚠️ ``sendUpdates="none"`` כשאין משתתפים.
+
+    פגישה ביומן של המשתמש לבדו אינה אמורה לייצר מייל לאף אחד, ו-``all``
+    כאן היה הופך פעולה הפיכה לפעולה שאינה הפיכה.
+    """
+    seen = _posted(monkeypatch)
+    made = gcal.create(
+        db,
+        "כושר",
+        datetime(2026, 11, 26, 8, 0, tzinfo=IL),
+        datetime(2026, 11, 26, 9, 0, tzinfo=IL),
+    )
+    assert made.id == "ev-1"
+    assert made.invited is False
+    assert seen["params"]["sendUpdates"] == "none"
+    assert "attendees" not in seen["body"]
+
+
+def test_an_event_with_a_guest_sends_the_invitation(db, monkeypatch):
+    """⚠️⚠️ ``sendUpdates="all"`` **רק** כשנמסרו משתתפים במפורש."""
+    seen = _posted(monkeypatch)
+    made = gcal.create(
+        db,
+        "פגישה",
+        datetime(2026, 11, 26, 10, 0, tzinfo=IL),
+        datetime(2026, 11, 26, 11, 0, tzinfo=IL),
+        ["dani@example.com"],
+    )
+    assert made.invited is True
+    assert seen["params"]["sendUpdates"] == "all"
+    assert seen["body"]["attendees"] == [{"email": "dani@example.com"}]
+
+
+def test_an_empty_guest_address_is_not_an_invitation(db, monkeypatch):
+    """מחרוזת ריקה ברשימה אינה משתתף, ואינה אמורה להדליק את השליחה."""
+    seen = _posted(monkeypatch)
+    made = gcal.create(
+        db,
+        "פגישה",
+        datetime(2026, 11, 26, 10, 0, tzinfo=IL),
+        datetime(2026, 11, 26, 11, 0, tzinfo=IL),
+        ["", "  "],
+    )
+    assert made.invited is False
+    assert seen["params"]["sendUpdates"] == "none"
+
+
+def test_the_event_is_created_on_the_primary_calendar(db, monkeypatch):
+    """⚠️ קביעה ביומן המשפחתי לא הוכרעה, וחדר הישיבות אינו של המשתמש."""
+    seen = _posted(monkeypatch)
+    gcal.create(
+        db,
+        "פגישה",
+        datetime(2026, 11, 26, 10, 0, tzinfo=IL),
+        datetime(2026, 11, 26, 11, 0, tzinfo=IL),
+    )
+    assert "calendars/primary/events" in seen["url"]
+
+
+def test_deleting_an_event_that_had_guests_tells_them(db, monkeypatch):
+    """⚠️ ההזמנה אינה נמחקת מהתיבה שלהם, אבל הודעת ביטול כן מגיעה.
+
+    זה הדבר הקרוב ביותר ל"בטל" שאפשר, ועדיף על שתיקה.
+    """
+    seen: dict = {}
+
+    class Fake:
+        status_code = 204
+
+    def capture(url, headers=None, params=None, timeout=None):
+        seen.update({"url": url, "params": params or {}})
+        return Fake()
+
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(gcal.httpx, "delete", capture)
+    assert gcal.delete_event(db, "ev-1", invited=True) is True
+    assert seen["params"]["sendUpdates"] == "all"
+
+    assert gcal.delete_event(db, "ev-1", invited=False) is True
+    assert seen["params"]["sendUpdates"] == "none"
+
+
+def test_deleting_an_event_that_is_already_gone_is_not_an_error(db, monkeypatch):
+    """⚠️ ‏404 ו-410 אינם תקלה: המשתמש מחק אותו בגוגל קלנדר בעצמו."""
+
+    class Gone:
+        status_code = 410
+
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(gcal.httpx, "delete", lambda *a, **k: Gone())
+    assert gcal.delete_event(db, "ev-1") is False
+
+
+# --- התנגשות ---
+
+
+def _free_busy(monkeypatch, slots: list[tuple[str, str]]):
+    class Fake:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"calendars": {"primary": {"busy": [{"start": s, "end": e} for s, e in slots]}}}
+
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(
+        gcal, "calendars", lambda session: [gcal.Calendar(id="primary", name="ראשי")]
+    )
+    monkeypatch.setattr(gcal.httpx, "post", lambda *a, **k: Fake())
+
+
+def test_an_overlap_that_starts_before_the_slot_is_a_conflict(db, monkeypatch):
+    """⚠️ **חפיפה ולא הכלה.**
+
+    פגישה 09:00–11:00 מתנגשת עם בקשה ל-10:00–11:00 גם שהיא מתחילה
+    לפניה. תנאי שבודק רק הכלה היה מפספס בדיוק את המצב הנפוץ.
+    """
+    _free_busy(monkeypatch, [("2026-11-26T07:00:00Z", "2026-11-26T09:00:00Z")])
+    clash = gcal.conflicts(
+        db,
+        datetime(2026, 11, 26, 10, 0, tzinfo=IL),
+        datetime(2026, 11, 26, 11, 0, tzinfo=IL),
+    )
+    assert len(clash) == 1
+
+
+def test_a_meeting_that_ends_exactly_when_the_slot_starts_is_not_a_conflict(db, monkeypatch):
+    """פגישה שנגמרת ב-10:00 אינה מתנגשת עם אחת שמתחילה ב-10:00."""
+    _free_busy(monkeypatch, [("2026-11-26T07:00:00Z", "2026-11-26T08:00:00Z")])
+    clash = gcal.conflicts(
+        db,
+        datetime(2026, 11, 26, 10, 0, tzinfo=IL),
+        datetime(2026, 11, 26, 11, 0, tzinfo=IL),
+    )
+    assert clash == []
+
+
+def test_free_busy_returns_no_titles(db, monkeypatch):
+    """⚠️ ‏``freeBusy`` מחזיר טווחים בלבד, בלי כותרות ובלי משתתפים.
+
+    זאת הסיבה שבדיקת התנגשות אינה דורשת הרשאה נוספת ואינה חושפת דבר.
+    """
+    _free_busy(monkeypatch, [("2026-11-26T07:00:00Z", "2026-11-26T08:00:00Z")])
+    ranges = gcal.busy(
+        db, datetime(2026, 11, 26, tzinfo=IL), datetime(2026, 11, 27, tzinfo=IL)
+    )
+    assert ranges == [
+        (
+            datetime(2026, 11, 26, 9, 0, tzinfo=IL),
+            datetime(2026, 11, 26, 10, 0, tzinfo=IL),
+        )
+    ]
+
+
+def test_the_next_free_slot_skips_what_is_busy(db, monkeypatch):
+    _free_busy(monkeypatch, [("2026-11-26T08:00:00Z", "2026-11-26T09:00:00Z")])
+    found = gcal.next_free(db, datetime(2026, 11, 26, 10, 0, tzinfo=IL), 60)
+    # תפוס 10:00–11:00 בשעון ישראל, ולכן הראשון הפנוי הוא 11:00
+    assert found == datetime(2026, 11, 26, 11, 0, tzinfo=IL)
+
+
+def test_the_next_free_slot_is_never_at_night(db, monkeypatch):
+    """⚠️ חלון פנוי בשתיים לפנות בוקר הוא תשובה נכונה וחסרת תועלת."""
+    _free_busy(monkeypatch, [])
+    found = gcal.next_free(db, datetime(2026, 11, 26, 23, 0, tzinfo=IL), 60)
+    assert found is not None
+    assert found.hour >= gcal.DAY_START
+    assert found.date() > date(2026, 11, 26)
+
+
+def test_the_next_free_slot_is_never_on_saturday(db, monkeypatch):
+    """⚠️ הצעה לקבוע בשבת אינה הצעה."""
+    _free_busy(monkeypatch, [])
+    # 28.11.2026 הוא שבת
+    found = gcal.next_free(db, datetime(2026, 11, 28, 9, 0, tzinfo=IL), 60)
+    assert found is not None
+    assert found.weekday() != gcal.SATURDAY
+
+
+def test_the_next_free_slot_is_rounded_to_a_quarter_hour(db, monkeypatch):
+    """לא להציע "10:07"."""
+    _free_busy(monkeypatch, [])
+    found = gcal.next_free(db, datetime(2026, 11, 26, 10, 7, tzinfo=IL), 60)
+    assert found is not None
+    assert found.minute % gcal.SLOT_MINUTES == 0

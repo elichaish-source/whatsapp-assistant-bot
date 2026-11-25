@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from .. import gauth, gcal, gmail
+from . import entities
 from .actions import Outcome
 from .intent import Intent
 
@@ -175,3 +177,212 @@ def list_events(db: Session, intent: Intent) -> Outcome:
     # חותכת בשקט. אותו לקח שנרשם ברשימות המיילים ב-4-2
     parts = gmail.split_message(body, max_parts=4)
     return Outcome("\n".join(parts), parts=parts if len(parts) > 1 else None)
+
+
+# --- קביעת פגישה (4ב-2) ---
+
+# ⚠️ **ההכרעה של 24.11.2026: קובעים מיד, בלי אישור מראש.** אירוע ביומן
+# הפיך לגמרי — כמו ארכוב ולא כמו שליחת מייל — ולכן אישור מראש הוא חיכוך
+# בלי הגנה. ⚠️ **חוץ ממצב אחד:** כשיש משתתף לזמן, כי ההזמנה שגוגל שולחת
+# בשם המשתמש אינה הפיכה.
+
+NO_TIME = (
+    "לא הבנתי מתי. אפשר לכתוב למשל «תקבע פגישה עם דני מחר ב-10» "
+    "או «פגישה ביום שלישי ב-14:30»."
+)
+NO_TITLE = "לא הבנתי על מה הפגישה. אפשר לכתוב למשל «פגישה עם דני מחר ב-10»."
+UNDO_HINT = "לביטול כתוב «בטל»."
+
+
+def _when_asked(raw: str) -> datetime | None:
+    """ממיר את מה שהמודל החזיר לזמן בשעון ישראל, או None.
+
+    ⚠️ **זמן שאינו זמן יורד, ולא מנוחש.** זה אותו שיקול של ``_valid_date``
+    ב-4-5: המודל עלול להחזיר "שלישי" או ``2026-13-45``, **ופגישה שנקבעה
+    לזמן הלא נכון בלי שמישהו שם לב גרועה מפגישה שלא נקבעה.**
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    # ⚠️ בלי שעה אין פגישה. "מחר" לבדו הוא חצות, וזה לא מה שהתכוונו
+    if len(text) <= 10:
+        return None
+    tz = gcal.local_tz()
+    return moment.replace(tzinfo=tz) if moment.tzinfo is None else moment.astimezone(tz)
+
+
+def _slot(moment: datetime) -> str:
+    """"מחר ב-10:00", או "יום שלישי 01/12 ב-10:00" כשזה רחוק יותר."""
+    today = datetime.now(tz=gcal.local_tz()).date()
+    delta = (moment.date() - today).days
+    if delta == 0:
+        day = "היום"
+    elif delta == 1:
+        day = "מחר"
+    else:
+        day = f"יום {day_name(moment.date())} {moment:%d/%m}"
+    return f"{day} ב-{moment:%H:%M}"
+
+
+def _busy_lines(ranges: list[tuple[datetime, datetime]]) -> str:
+    return "\n".join(f"{start:%H:%M}–{end:%H:%M}" for start, end in ranges[:4])
+
+
+def _guest(db: Session, said: str) -> tuple[str, str, Outcome | None]:
+    """מי לזמן: (שם, כתובת, תשובה שעוצרת).
+
+    ⚠️⚠️ **הכתובת נגזרת בשרת מכרטיס הלקוח ולעולם אינה מגיעה מהמודל** —
+    אותו דפוס של 4-4, ומאותה סיבה: כתובת שמודל "זוכר" או משלים עלולה
+    לשלוח הזמנה לאדם הלא נכון, וזה אינו הפיך.
+
+    ⚠️ **אין התאמה — אין זימון, והבוט אומר זאת.** ⚠️ **וכמה התאמות —
+    שואל ואינו בוחר**, כמו ``update_task``.
+    """
+    name = (said or "").strip()
+    if not name:
+        return "", "", None
+
+    found = entities.similar_clients(db, name)
+    with_mail = [client for client in found if (client.email or "").strip()]
+    if len(with_mail) > 1:
+        names = ", ".join(client.name for client in with_mail[:5])
+        return name, "", Outcome(f"יש כמה שזה מתאים להם: {names}. על מי מהם מדובר?")
+    if not with_mail:
+        # ⚠️ קובעים בלי לזמן, ואומרים זאת. לנחש כתובת מהשם הוא בדיוק
+        # מה שאסור, ולא לקבוע בכלל היה מעניש את המשתמש על חוסר נתון
+        return name, "", None
+    return with_mail[0].name, (with_mail[0].email or "").strip(), None
+
+
+def _check_free(db: Session, begins: datetime, ends: datetime) -> Outcome | None:
+    """התנגשות אינה שגיאה אלא שאלה.
+
+    ⚠️ **הבוט אינו קובע על פגישה קיימת ואינו מסרב סתם** — הוא אומר מה
+    תפוס ומציע את החלון הפנוי הבא.
+    """
+    clash = gcal.conflicts(db, begins, ends)
+    if not clash:
+        return None
+    minutes = int((ends - begins).total_seconds() // 60)
+    free = gcal.next_free(db, begins, minutes)
+    reply = f"{_slot(begins)} תפוס:\n{_busy_lines(clash)}"
+    reply += f"\n\nפנוי {_slot(free)}." if free else "\n\nלא מצאתי חלון פנוי בשבוע הקרוב."
+    return Outcome(reply + "\nלקבוע שם? או תגיד לי שעה אחרת.")
+
+
+def _create(db: Session, title: str, begins: datetime, minutes: int, guest: str) -> Outcome:
+    """היצירה עצמה, מ-``add_event`` או מ-``confirm``."""
+    ends = begins + timedelta(minutes=minutes)
+    try:
+        made = gcal.create(db, title, begins, ends, [guest] if guest else None)
+    except gauth.GoogleDisconnected:
+        return Outcome(DISCONNECTED)
+    except (gcal.CalendarError, gauth.GoogleError) as exc:
+        log.warning("יצירת אירוע נכשלה: %s", exc)
+        return Outcome("לא הצלחתי לקבוע את הפגישה כרגע. אפשר לנסות שוב בעוד רגע.")
+
+    reply = f"נקבע: {title}\n{_slot(begins)}–{ends:%H:%M}"
+    if made.invited:
+        reply += f"\nהזמנה נשלחה ל-{guest}"
+    return Outcome(
+        f"{reply}\n{UNDO_HINT}",
+        undo={"kind": "created_event", "event_id": made.id, "invited": made.invited},
+    )
+
+
+def add_event(db: Session, intent: Intent) -> Outcome:
+    """"תקבע פגישה עם דני מחר ב-10"."""
+    blocked = _ready(db)
+    if blocked:
+        return blocked
+
+    title = (intent.title or "").strip()
+    begins = _when_asked(intent.event_at)
+    if not begins:
+        return Outcome(NO_TIME)
+    if not title:
+        return Outcome(NO_TITLE)
+
+    minutes = intent.event_minutes if intent.event_minutes > 0 else gcal.DEFAULT_MINUTES
+    name, guest, stop = _guest(db, intent.event_with)
+    if stop:
+        return stop
+
+    try:
+        clash = _check_free(db, begins, begins + timedelta(minutes=minutes))
+    except gauth.GoogleDisconnected:
+        return Outcome(DISCONNECTED)
+    except (gcal.CalendarError, gauth.GoogleError) as exc:
+        return _unavailable(exc)
+    if clash:
+        return clash
+
+    if guest:
+        # ⚠️⚠️ **רק כאן יש אישור מראש, וזאת הסיבה היחידה:** ההזמנה שגוגל
+        # שולחת בשם המשתמש אינה הפיכה. הפעולה נשמרת ב-pending_json
+        # והיצירה קורית ב-confirm, שנקרא מההודעה הקודמת ולא מהמודל
+        return Outcome(
+            f"לקבוע «{title}» {_slot(begins)} ולשלוח הזמנה ל-{name} ({guest})?\n"
+            "⚠️ הזמנה שיצאה אי אפשר להחזיר. לאישור כתוב «כן».",
+            pending={
+                "kind": "add_event",
+                "data": {
+                    "title": title,
+                    "at": begins.isoformat(),
+                    "minutes": minutes,
+                    "guest": guest,
+                },
+            },
+        )
+
+    outcome = _create(db, title, begins, minutes, "")
+    if name and not guest:
+        # ⚠️ נאמר במפורש ולא נבלע: המשתמש ביקש לזמן, וזה לא קרה
+        outcome.reply += f"\n\nלא זימנתי את {name} — אין לו כתובת מייל בכרטיס הלקוח."
+    return outcome
+
+
+def confirmed(db: Session, pending: dict) -> Outcome:
+    """"כן" על זימון. ⚠️ ההתנגשות נבדקת שוב, כי היומן יכול היה להשתנות."""
+    data = pending.get("data") or {}
+    begins = _when_asked(str(data.get("at") or ""))
+    if not begins:
+        return Outcome("לא הצלחתי לשחזר את מה ששאלתי. אפשר לבקש שוב.")
+    minutes = int(data.get("minutes") or gcal.DEFAULT_MINUTES)
+    try:
+        clash = _check_free(db, begins, begins + timedelta(minutes=minutes))
+    except (gcal.CalendarError, gauth.GoogleError, gauth.GoogleDisconnected) as exc:
+        return _unavailable(exc)
+    if clash:
+        return clash
+    return _create(db, str(data.get("title") or ""), begins, minutes, str(data.get("guest") or ""))
+
+
+def undo(db: Session, row, data: dict) -> Outcome:
+    """"בטל" על אירוע שנקבע.
+
+    ⚠️ **ההזמנה שיצאה אינה נמחקת מהתיבה של הנמען**, אבל הודעת ביטול כן
+    מגיעה אליו וההזמנה מסומנת כמבוטלת. זה הדבר הקרוב ביותר ל"בטל"
+    שאפשר, ועדיף על שתיקה.
+    """
+    if data.get("used"):
+        return Outcome("זה כבר בוטל.")
+    try:
+        existed = gcal.delete_event(db, str(data.get("event_id") or ""), bool(data.get("invited")))
+    except (gcal.CalendarError, gauth.GoogleError, gauth.GoogleDisconnected) as exc:
+        return _unavailable(exc)
+
+    # ⚠️ מסמנים ולא מרוקנים, כמו ב-entities וב-lists: כך "בטל" שני עונה
+    # "זה כבר בוטל" ואינו ממשיך אחורה ומוחק משהו אחר
+    row.undo_json = json.dumps({"kind": "created_event", "used": True})
+    db.commit()
+    if not existed:
+        return Outcome("האירוע הזה כבר לא ביומן.")
+    reply = "הפגישה בוטלה והוסרה מהיומן."
+    if data.get("invited"):
+        reply += "\n⚠️ ההזמנה שיצאה נשארת בתיבה של הנמען, אבל הוא קיבל הודעת ביטול."
+    return Outcome(reply)
