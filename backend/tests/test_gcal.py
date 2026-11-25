@@ -407,3 +407,47 @@ def test_an_attendee_is_shown_by_name_when_google_has_one():
     assert event is not None
     # שם כשיש, וכתובת כשאין — ולא שורה ריקה
     assert event.attendees == ["דני כהן", "noname@example.com", "blank@example.com"]
+
+
+def test_an_attendee_who_is_a_client_is_shown_by_the_card_name(db, monkeypatch):
+    """⚠️⚠️ זה מה שבאמת פותר את שמות המשתתפים.
+
+    העדפת ``displayName`` נכונה אך אינה מספיקה: בפלט האמיתי של
+    25.11.2026 גוגל לא החזירה אותו **לאף אחד** מ-7 המשתתפים, והתשובה
+    הציגה שבע כתובות מייל. השם מגיע מכרטיס הלקוח, בקוד ולא במודל.
+    """
+    from app.models import Client
+
+    db.add(Client(name="דני כהן", email="Dani@Example.com"))
+    db.flush()
+
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(
+        gcal, "calendars", lambda session: [gcal.Calendar(id="me@gmail.com", name="ראשי")]
+    )
+    monkeypatch.setattr(
+        gcal,
+        "_events",
+        lambda token, cal, begins, ends: [
+            gcal.Event(
+                id="a",
+                title="פגישה",
+                calendar="ראשי",
+                start=datetime(2026, 11, 25, 9, 0, tzinfo=IL),
+                attendees=["dani@example.com", "stranger@example.com"],
+            )
+        ],
+    )
+    found = gcal.agenda(db, "today")
+    # ⚠️ ההשוואה אינה תלויה באותיות גדולות: בכרטיס נרשם Dani@Example.com
+    assert found[0].attendees == ["דני כהן", "stranger@example.com"]
+    db.rollback()
+
+
+def test_a_client_card_without_an_email_does_not_break_the_lookup(db):
+    from app.models import Client
+
+    db.add(Client(name="בלי מייל"))
+    db.flush()
+    assert gcal.client_names(db) == {}
+    db.rollback()

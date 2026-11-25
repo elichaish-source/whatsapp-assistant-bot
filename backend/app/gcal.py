@@ -26,14 +26,17 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from email.utils import parseaddr
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import gauth
 from .config import get_settings
+from .models import Client
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +165,27 @@ def _path(calendar_id: str, suffix: str = "events") -> str:
     שקיים לגמרי.
     """
     return f"calendars/{quote(calendar_id, safe='')}/{suffix}"
+
+
+def client_names(db: Session) -> dict[str, str]:
+    """כתובת מייל ← שם הלקוח, מכרטיסי הלקוחות.
+
+    ⚠️⚠️ **זה מה שבאמת פותר את שמות המשתתפים.** גוגל מחזירה
+    ``displayName`` רק כשהמשתתף הוזן בשם או נמצא באנשי הקשר, ובפלט
+    האמיתי של 25.11.2026 היא לא החזירה אותו **לאף אחד** מ-7 המשתתפים
+    — כלומר העדפת ``displayName`` נכונה אך אינה מספיקה.
+
+    ⚠️ **בקוד ולא במודל**, בדיוק כמו שיוך הלקוח ב-4-5 וכמו
+    ``client_addresses`` בסינון: שם שמוצג למשתמש אינו אמור להיות תלוי
+    בשיקול דעת של מודל.
+    """
+    found: dict[str, str] = {}
+    rows = db.execute(select(Client.name, Client.email).where(Client.email.is_not(None))).all()
+    for name, value in rows:
+        address = parseaddr(str(value))[1].strip().lower()
+        if address and name:
+            found[address] = str(name).strip()
+    return found
 
 
 def calendars(db: Session) -> list[Calendar]:
@@ -296,6 +320,15 @@ def agenda(db: Session, scope: str = "today") -> list[Event]:
         batches = list(pool.map(lambda cal: _events(token, cal, begins, ends), cals))
 
     found = [event for batch in batches for event in batch]
+
+    # ⚠️ שמות הלקוחות מוחלפים **אחרי** השליפה ולא בתוך ``_parse``:
+    # ‏``_parse`` טהורה ואינה מכירה את המסד, וכך היא נשארת ניתנת לבדיקה
+    # בלי בסיס נתונים. שאילתה אחת לכל הסבב, ולא אחת לכל משתתף
+    known = client_names(db)
+    if known:
+        for event in found:
+            event.attendees = [known.get(who.lower(), who) for who in event.attendees]
+
     # אירוע של כל היום ראשון באותו תאריך, ואחריו לפי שעה
     found.sort(key=lambda event: (event.when, not event.all_day, event.start or begins))
     return found
