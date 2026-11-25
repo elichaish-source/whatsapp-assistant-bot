@@ -246,7 +246,7 @@ def test_events_from_several_calendars_are_merged_and_sorted(db, monkeypatch):
     monkeypatch.setattr(
         gcal,
         "calendars",
-        lambda session: [
+        lambda session, owned_only=True: [
             gcal.Calendar(id="me@gmail.com", name="ראשי", primary=True),
             gcal.Calendar(id="family@group.calendar.google.com", name="משפחתי"),
         ],
@@ -281,7 +281,7 @@ def test_events_from_several_calendars_are_merged_and_sorted(db, monkeypatch):
 
 def test_no_calendars_means_no_events_and_no_call(db, monkeypatch):
     """בלי יומנים אין למי לפנות, ואין טעם לשלוף טוקן."""
-    monkeypatch.setattr(gcal, "calendars", lambda session: [])
+    monkeypatch.setattr(gcal, "calendars", lambda session, owned_only=True: [])
 
     def explode(*args, **kwargs):  # pragma: no cover - אמור לא להיקרא
         raise AssertionError("לא אמורה להיות פנייה לגוגל")
@@ -321,7 +321,7 @@ def test_a_session_is_never_used_inside_the_threads(db, monkeypatch):
     """
     monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
     monkeypatch.setattr(
-        gcal, "calendars", lambda session: [gcal.Calendar(id="me@gmail.com", name="ראשי")]
+        gcal, "calendars", lambda session, owned_only=True: [gcal.Calendar(id="me@gmail.com", name="ראשי")]
     )
     got: list = []
 
@@ -426,7 +426,7 @@ def test_an_attendee_who_is_a_client_is_shown_by_the_card_name(db, monkeypatch):
 
     monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
     monkeypatch.setattr(
-        gcal, "calendars", lambda session: [gcal.Calendar(id="me@gmail.com", name="ראשי")]
+        gcal, "calendars", lambda session, owned_only=True: [gcal.Calendar(id="me@gmail.com", name="ראשי")]
     )
     monkeypatch.setattr(
         gcal,
@@ -586,7 +586,7 @@ def _free_busy(monkeypatch, slots: list[tuple[str, str]]):
 
     monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
     monkeypatch.setattr(
-        gcal, "calendars", lambda session: [gcal.Calendar(id="primary", name="ראשי")]
+        gcal, "calendars", lambda session, owned_only=True: [gcal.Calendar(id="primary", name="ראשי")]
     )
     monkeypatch.setattr(gcal.httpx, "post", lambda *a, **k: Fake())
 
@@ -702,7 +702,7 @@ def test_a_window_asks_google_for_exactly_the_times_it_was_given(db, monkeypatch
     ועד 45 דקות קדימה", וטווח כזה אינו יום ואינו שבוע."""
     monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
     monkeypatch.setattr(
-        gcal, "calendars", lambda session: [gcal.Calendar(id="me", name="ראשי", primary=True)]
+        gcal, "calendars", lambda session, owned_only=True: [gcal.Calendar(id="me", name="ראשי", primary=True)]
     )
     seen: dict = {}
 
