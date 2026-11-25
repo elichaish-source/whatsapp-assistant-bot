@@ -792,3 +792,156 @@ def test_no_addresses_means_no_lookup_at_all(db, monkeypatch):
 
     monkeypatch.setattr(gcal, "window", explode)
     assert gcal.last_meeting_with(db, set(), datetime(2026, 11, 25, 9, 0, tzinfo=IL)) is None
+
+
+# --- מה שהמסך קורא, והוא רחב יותר מהבוט (4ב-4) ---
+
+
+def test_the_screen_also_reads_the_calendars_that_are_only_readable(db, monkeypatch):
+    """⚠️⚠️ הכרעת 25.11.2026: המסך רואה גם חדר ישיבות וגם חגים.
+
+    בתשובה היומית של הבוט הם רעש — חג מוסיף שורה כמעט כל שבוע — אבל
+    בלוח שבועי הם הקשר: "חמישי חג" ו"החדר תפוס" הם בדיוק מה שמסתכלים
+    עליו כשמתכננים. **הבוט אינו משתנה**, וזאת הסיבה שזה דגל ולא ברירת
+    מחדל חדשה.
+    """
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(
+        gcal,
+        "_request",
+        lambda token, path, params=None: calendar_list(
+            entry("me@gmail.com", "אני", primary=True),
+            entry("family@group.calendar.google.com", "היומן המשפחתי"),
+            entry("room@group.calendar.google.com", "חדר ישיבות", role="reader"),
+            entry("iw.jewish#holiday@group.v.calendar.google.com", "חגים", role="reader"),
+        ),
+    )
+    # הבוט: שניים. המסך: ארבעה
+    assert len(gcal.calendars(db)) == 2
+    assert len(gcal.calendars(db, owned_only=False)) == 4
+
+
+def test_a_calendar_nobody_may_read_is_excluded_from_the_screen_too(db, monkeypatch):
+    """⚠️ ההרחבה היא ל-``READABLE`` ולא ל"הכול".
+
+    גוגל מחזירה גם ``freeBusyReader`` — הרשאה שרואה שהזמן תפוס ואינה
+    רואה מה יש שם. יומן כזה היה נכנס לרשימה ומחזיר אפס אירועים תמיד,
+    כלומר שורה במקרא שלעולם אינה מסבירה כלום.
+    """
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(
+        gcal,
+        "_request",
+        lambda token, path, params=None: calendar_list(
+            entry("me@gmail.com", "אני", primary=True),
+            entry("blind@group.calendar.google.com", "תפוס בלבד", role="freeBusyReader"),
+        ),
+    )
+    assert [cal.name for cal in gcal.calendars(db, owned_only=False)] == ["אני"]
+
+
+def test_calendar_skip_still_applies_to_the_screen(db, monkeypatch):
+    """⚠️⚠️ יומן "משימות" נשאר בחוץ **בשני המסלולים**.
+
+    הוא שכבה שנייה של אותו דבר שהמערכת הזאת בונה, ושתי רשימות משימות
+    הן רשימה אחת שאף אחד לא סומך עליה. אם ההחרגה הייתה חלה על הבוט
+    בלבד, המסך היה מציג את המשימות של המערכת בחזרה כאירועים.
+    """
+    get_settings.cache_clear()
+    monkeypatch.setenv("CALENDAR_SKIP", "tasks@group.calendar.google.com")
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+    monkeypatch.setattr(
+        gcal,
+        "_request",
+        lambda token, path, params=None: calendar_list(
+            entry("me@gmail.com", "אני", primary=True),
+            entry("tasks@group.calendar.google.com", "משימות"),
+            entry("room@group.calendar.google.com", "חדר ישיבות", role="reader"),
+        ),
+    )
+    try:
+        names = [cal.name for cal in gcal.calendars(db, owned_only=False)]
+        assert names == ["אני", "חדר ישיבות"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_an_event_carries_the_id_of_its_calendar_and_not_only_the_name(monkeypatch):
+    """⚠️ המסך צובע לפי המזהה, כי שם יומן הוא טקסט שאפשר לשנות בגוגל."""
+    monkeypatch.setattr(
+        gcal, "_request", lambda token, path, params=None: {"items": [timed("2026-11-25T07:30:00Z")]}
+    )
+    found = gcal._events(
+        "tok",
+        gcal.Calendar(id="family@group.calendar.google.com", name="משפחתי", primary=False),
+        datetime(2026, 11, 25, tzinfo=IL),
+        datetime(2026, 11, 26, tzinfo=IL),
+    )
+    assert found[0].calendar_id == "family@group.calendar.google.com"
+    # והשם נשאר כפי שהיה, כדי שהבוט לא ישתנה
+    assert found[0].calendar == "משפחתי"
+
+
+# --- טווח לפי תאריכים, שהמסך צריך לדפדוף ---
+
+
+def test_a_day_range_asks_google_for_exactly_the_days_requested(db, monkeypatch):
+    """⚠️ שבוע שאינו השבוע הזה אינו ``scope``, ולכן המסך שולח טווח.
+
+    הגבולות נבנים כ-``datetime`` ולא מחושבים משעות — אותו לקח שנרשם
+    ב-4ב-2, כשבדיקה על ``finish.hour`` הפכה 23:00 לחלון פנוי תקין.
+    """
+    seen: dict = {}
+    monkeypatch.setattr(
+        gcal, "calendars", lambda session, owned_only=True: [gcal.Calendar(id="me", name="אני", primary=True)]
+    )
+    monkeypatch.setattr(gcal.gauth, "access_token", lambda session: "tok")
+
+    def fake(token, cal, begins, ends):
+        seen["begins"], seen["ends"] = begins, ends
+        return []
+
+    monkeypatch.setattr(gcal, "_events", fake)
+    gcal.day_range(db, date(2026, 11, 22), 7)
+    assert seen["begins"] == datetime(2026, 11, 22, tzinfo=IL)
+    # ⚠️ חצות של **היום הבא** אחרי האחרון, ולא 23:59 של האחרון: אחרת
+    # פגישה ב-23:45 ביום השביעי הייתה נעלמת מהלוח
+    assert seen["ends"] == datetime(2026, 11, 29, tzinfo=IL)
+
+
+def test_a_day_range_passes_the_wider_calendar_choice_through(db, monkeypatch):
+    """הדגל מגיע עד ``calendars``, אחרת המסך היה רואה כמו הבוט."""
+    asked: list = []
+    monkeypatch.setattr(
+        gcal,
+        "calendars",
+        lambda session, owned_only=True: (asked.append(owned_only), [])[1],
+    )
+    gcal.day_range(db, date(2026, 11, 22), 7, owned_only=False)
+    assert asked == [False]
+
+
+def test_the_bot_still_reads_only_the_owned_calendars(db, monkeypatch):
+    """⚠️⚠️ **ההתנהגות שאומתה מול היומן האמיתי ב-25.11 אינה משתנה.**
+
+    ‏``agenda`` היא מה שהבוט קורא, והיא אינה מעבירה את הדגל — כלומר
+    ברירת המחדל נשארה הראשי והמשפחתי. בדיקה שתיפול אם מישהו יהפוך את
+    ההרחבה לברירת מחדל "כי זה נוח".
+    """
+    asked: list = []
+    monkeypatch.setattr(
+        gcal,
+        "calendars",
+        lambda session, owned_only=True: (asked.append(owned_only), [])[1],
+    )
+    gcal.agenda(db, "today")
+    assert asked == [True]
+
+
+def test_today_is_read_from_the_installation_clock(monkeypatch):
+    """⚠️ היום נקבע בשרת ולא בדפדפן.
+
+    המסך מדגיש את עמודת היום, ודפדפן באזור זמן אחר היה מדגיש את
+    העמודה הלא נכונה — שגיאה שקטה שאי אפשר לראות מהמשרד.
+    """
+    assert gcal.today_local() == datetime.now(tz=IL).date()

@@ -9,6 +9,7 @@ from .config import get_settings
 from .routers import (
     auth,
     bot,
+    calendar,
     clients,
     emails,
     google,
@@ -45,7 +46,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-for module in (auth, lookups, clients, projects, tasks, recurrences, memory, google, emails, bot):
+for module in (
+    auth,
+    lookups,
+    clients,
+    projects,
+    tasks,
+    recurrences,
+    memory,
+    google,
+    emails,
+    calendar,
+    bot,
+):
     app.include_router(module.router)
 
 

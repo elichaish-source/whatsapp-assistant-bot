@@ -56,3 +56,68 @@ export function formatWhen(value: string): string {
   const date = when.toLocaleDateString("he-IL", { timeZone: TZ, day: "2-digit", month: "2-digit" });
   return `${date} ${time}`;
 }
+
+/* --- היומן (4ב-4) --- */
+
+/**
+ * שמות הימים בעברית, לפי `getDay()` (0 = ראשון).
+ * ⚠️ כתובים ביד ולא נגזרים מ-`Intl`, בדיוק כמו ב-`bot/events.py`: כך
+ * אותו שם יוצא בבוט ובמסך, ואין תלות בטבלאות השפה של הדפדפן.
+ */
+const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+
+export function dayName(value: Date): string {
+  return DAY_NAMES[value.getDay()];
+}
+
+/**
+ * תאריך כ-"YYYY-MM-DD" **בשעון ישראל**.
+ *
+ * ⚠️⚠️ זה מה שקובע לאיזו עמודה בלוח האירוע שייך, ולכן הוא חייב להיות
+ * בשעון של היומן ולא בשעון של הדפדפן. פגישה ב-00:30 תשב ביום הלא נכון
+ * בכל דפדפן שאינו בישראל — וזאת שגיאה שקטה שאי אפשר לראות מהמשרד.
+ * אותו דפוס של `isOverdue` ו-`formatWhen` כאן למעלה.
+ */
+export function dayKey(value: Date): string {
+  return value.toLocaleDateString("en-CA", { timeZone: TZ });
+}
+
+/** דקות מתחילת היום, בשעון ישראל. זה המיקום האנכי של אירוע בלוח */
+export function minutesOfDay(value: Date): number {
+  const [h, m] = value
+    .toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false })
+    .split(":");
+  return Number(h) * 60 + Number(m);
+}
+
+/** "14:30", בשעון ישראל */
+export function formatTime(value: string): string {
+  return new Date(value).toLocaleTimeString("he-IL", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** יום ראשון של השבוע שבו התאריך נמצא. בישראל השבוע מתחיל בראשון */
+export function weekStart(value: Date): Date {
+  const first = new Date(value);
+  first.setDate(first.getDate() - first.getDay());
+  return first;
+}
+
+/**
+ * תאריך כ-"YYYY-MM-DD" מתוך `Date` מקומי, בלי מעבר ל-UTC.
+ * ⚠️ `toISOString()` היה מזיז את התאריך ביום שלם בחצי הכהה של היממה,
+ * כי הוא ממיר ל-UTC: 01/12 בחצות בישראל הוא 30/11 ב-UTC.
+ */
+export function toDateValue(value: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+/** "YYYY-MM-DD" ל-`Date` מקומי. ⚠️ `new Date("2026-11-25")` הוא UTC */
+export function fromDateValue(value: string): Date {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}

@@ -867,3 +867,320 @@ pre {
   background: var(--selected);
   font-weight: 600;
 }
+
+/* --- מסך היומן (4ב-4). ⚠️ קריאה בלבד: אין כאן שום סגנון של פעולה --- */
+
+/* ששת צבעי היומנים. ⚠️ **הצבע נקבע לפי מזהה היומן ולא לפי שמו**,
+   והסדר שהשרת מחזיר קבוע (הראשי קודם, ואז לפי שם) — ולכן אותו יומן
+   מקבל אותו צבע בכל טעינה */
+:root {
+  --cal-ink: #ffffff;
+  --cal-c0: #0f766e;
+  --cal-c1: #b45309;
+  --cal-c2: #6d28d9;
+  --cal-c3: #0369a1;
+  --cal-c4: #be123c;
+  --cal-c5: #4d7c0f;
+  /* רקע עמודת היום. ⚠️ רקע ולא מסגרת: מסגרת על עמודה שלמה נראית כמו
+     גבול של טבלה ולא כמו הדגשה */
+  --cal-today-bg: #ecfdf5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* ⚠️ במצב כהה הצבעים מתבהרים והטקסט מתכהה. גוון כהה עם טקסט לבן
+       נעלם לגמרי על רקע כהה */
+    --cal-ink: #0b1118;
+    --cal-c0: #2dd4bf;
+    --cal-c1: #fbbf24;
+    --cal-c2: #c4b5fd;
+    --cal-c3: #7dd3fc;
+    --cal-c4: #fda4af;
+    --cal-c5: #bef264;
+    --cal-today-bg: #14312c;
+  }
+}
+
+.cal-range {
+  align-self: center;
+  font-weight: 600;
+  margin-inline: 4px;
+}
+
+/* ⚠️ הגלילה האופקית היא של העוטף ולא של הדף. בנייד הלוח רחב מהמסך,
+   ובלי זה כל הדשבורד היה נגלל הצידה */
+.cal-grid-wrap {
+  overflow-x: auto;
+}
+
+.cal-grid {
+  display: grid;
+  /* טור השעות בגודל קבוע, והימים מתחלקים שווה בשווה. ⚠️ ‏96px הוא
+     המינימום שבו כותרת פגישה עוד נקראת — מתחתיו הלוח גולל */
+  grid-template-columns: 54px repeat(var(--cal-days), minmax(96px, 1fr));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  min-width: 100%;
+}
+
+.cal-corner,
+.cal-head {
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  line-height: 1.25;
+  border-inline-start: 1px solid var(--border);
+}
+
+.cal-head.on {
+  color: var(--when-today);
+  font-weight: 700;
+  background: var(--cal-today-bg);
+}
+
+.cal-head-name {
+  font-size: 0.86rem;
+}
+
+.cal-head-date {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.cal-head.on .cal-head-date {
+  color: inherit;
+}
+
+/* ⚠️ פס "כל היום" נפרד מהלוח, כי לאירוע כזה אין שעה. למקם אותו
+   ב-00:00 היה מציג חג בראש העמודה כאילו הוא פגישה בחצות */
+.cal-allday-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding: 6px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-allday {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  min-height: 30px;
+  border-inline-start: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ⚠️ ``min-height: 0`` מבטל את כלל ה-44 פיקסלים של הנייד. הוא נכתב
+   לכפתורי פעולה, וכאן הוא היה הופך כל חג לריבוע ענק */
+.cal-chip,
+.cal-event {
+  min-height: 0;
+  border: none;
+  border-radius: 6px;
+  text-align: start;
+  overflow: hidden;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  padding: 2px 6px;
+}
+
+.cal-chip {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cal-hours {
+  display: flex;
+  flex-direction: column;
+}
+
+.cal-hour {
+  flex: 1;
+  position: relative;
+}
+
+/* התווית בראש השעה שלה. ⚠️ בלי היסט שלילי, אחרת 07:00 נחתך למעלה */
+.cal-hour span {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 6px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.cal-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-inline-start: 1px solid var(--border);
+}
+
+.cal-col.on {
+  background: var(--cal-today-bg);
+}
+
+.cal-slot {
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.cal-slot:first-child {
+  border-top: none;
+}
+
+.cal-event {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* מסגרת בצבע הרקע, כדי ששתי פגישות צמודות לא ייראו כגוש אחד */
+  outline: 1px solid var(--surface);
+}
+
+.cal-event-time {
+  font-size: 0.68rem;
+  opacity: 0.85;
+}
+
+.cal-event-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* קו "עכשיו". ⚠️ ``pointer-events: none`` כדי שלא יחסום לחיצה על
+   פגישה שהוא עובר עליה */
+.cal-now {
+  position: absolute;
+  inset-inline: 0;
+  height: 2px;
+  background: var(--when-today);
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* --- לוח זמנים: רשימה מקובצת לפי יום --- */
+
+.cal-day-head {
+  font-size: 1rem;
+  margin: 16px 0 8px;
+}
+
+.cal-day-head.on {
+  color: var(--when-today);
+}
+
+.cal-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.cal-dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.cal-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 96px;
+}
+
+.cal-title {
+  font-weight: 600;
+}
+
+/* הפרטים נדחקים לקצה השורה, ובמסך צר יורדים לשורה משלהם */
+.cal-extra {
+  margin-inline-start: auto;
+}
+
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 14px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cal-chip.c0,
+.cal-event.c0 {
+  background: var(--cal-c0);
+  color: var(--cal-ink);
+}
+.cal-chip.c1,
+.cal-event.c1 {
+  background: var(--cal-c1);
+  color: var(--cal-ink);
+}
+.cal-chip.c2,
+.cal-event.c2 {
+  background: var(--cal-c2);
+  color: var(--cal-ink);
+}
+.cal-chip.c3,
+.cal-event.c3 {
+  background: var(--cal-c3);
+  color: var(--cal-ink);
+}
+.cal-chip.c4,
+.cal-event.c4 {
+  background: var(--cal-c4);
+  color: var(--cal-ink);
+}
+.cal-chip.c5,
+.cal-event.c5 {
+  background: var(--cal-c5);
+  color: var(--cal-ink);
+}
+
+.cal-dot.c0 {
+  background: var(--cal-c0);
+}
+.cal-dot.c1 {
+  background: var(--cal-c1);
+}
+.cal-dot.c2 {
+  background: var(--cal-c2);
+}
+.cal-dot.c3 {
+  background: var(--cal-c3);
+}
+.cal-dot.c4 {
+  background: var(--cal-c4);
+}
+.cal-dot.c5 {
+  background: var(--cal-c5);
+}
+
+@media (max-width: 720px) {
+  /* בנייד השורה נושאת שעה וכותרת, והפרטים יורדים מתחתיהן */
+  .cal-extra {
+    margin-inline-start: 0;
+    flex-basis: 100%;
+  }
+  .cal-time {
+    min-width: 84px;
+  }
+}

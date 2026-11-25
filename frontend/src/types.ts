@@ -243,3 +243,57 @@ export interface ReplySent {
   // ⚠️ השליחה הצליחה גם אם זה false. את המייל אי אפשר להחזיר
   archived: boolean;
 }
+
+/* --- מסך היומן (4ב-4). ⚠️ קריאה בלבד: אין כאן טיפוס קלט אחד --- */
+
+/**
+ * התצוגות שהמסך מציע, כמו ביומן גוגל.
+ * ⚠️ אינן נשלחות לשרת — השרת מקבל `start` ו-`days`, והמרת התצוגה לטווח
+ * נעשית כאן. שבוע שאינו השבוע הזה אינו "scope", ולכן אין מה לשלוח.
+ */
+export type CalendarView = "day" | "week" | "schedule";
+
+export const CALENDAR_VIEW_LABELS: Record<CalendarView, string> = {
+  day: "יום",
+  week: "שבוע",
+  schedule: "לוח זמנים",
+};
+
+/** יומן אחד שנקרא, למקרא ולצביעה. ⚠️ הצבע נקבע לפי `id` ולא לפי השם */
+export interface CalendarRef {
+  id: string;
+  name: string;
+  primary: boolean;
+}
+
+/**
+ * אירוע אחד בלוח.
+ * ⚠️ אינו נשמר בשום מקום: נקרא מגוגל ברגע הבקשה, מוצג, ונזרק.
+ * ⚠️ אין כאן שום שדה שמודל כתב — שעה וכותרת הן עובדות מהיומן.
+ */
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  calendar: string;
+  calendar_id: string;
+  // ⚠️ שם היומן מוצג רק כשזה false. אירוע משפחתי או חג שנראה כמו
+  // פגישת עבודה מרוקן את ההכרעה לקרוא גם אותם
+  from_primary: boolean;
+  // ⚠️ אירוע של כל היום אין לו שעה: `day` מלא ו-`start` ריק
+  all_day: boolean;
+  start: string | null;
+  end: string | null;
+  day: string | null;
+  location: string;
+  attendees: string[];
+}
+
+export interface CalendarData {
+  start: string;
+  days: number;
+  // ⚠️ נקבע בשרת, בשעון ישראל. דפדפן באזור זמן אחר היה מדגיש את
+  // העמודה הלא נכונה
+  today: string;
+  calendars: CalendarRef[];
+  events: CalendarEvent[];
+}

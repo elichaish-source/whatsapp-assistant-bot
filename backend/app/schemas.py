@@ -397,3 +397,59 @@ class ReplySentOut(BaseModel):
     to: str
     subject: str
     archived: bool = False
+
+
+# --- מסך היומן (4ב-4). ⚠️ קריאה בלבד: אין כאן שום סכימת קלט ---
+
+
+class CalendarRefOut(BaseModel):
+    """יומן אחד שהמסך קורא ממנו, למקרא ולצביעה.
+
+    ⚠️ **המזהה חוזר כדי שהצבע ייקבע לפיו ולא לפי השם.** שם יומן הוא
+    טקסט שהמשתמש יכול לשנות בגוגל, והמזהה הוא המפתח היציב.
+    """
+
+    id: str
+    name: str
+    primary: bool = False
+
+
+class CalendarEventOut(BaseModel):
+    """אירוע אחד בלוח. ⚠️ **אינו נשמר בשום מקום** — נקרא מגוגל ברגע
+    הבקשה, מוצג, ונזרק, בדיוק כמו מייל ב-``EmailItemOut``.
+
+    ⚠️ **``emails`` של ``gcal.Event`` אינו כאן בכוונה.** הוא קיים בשכבת
+    השירות לזיהוי הלקוח בתדריך (4ב-3), ואין לו שום שימוש בתצוגה —
+    ``attendees`` הוא מה שנראה.
+    """
+
+    id: str
+    title: str
+    calendar: str
+    calendar_id: str = ""
+    # ⚠️ שם היומן מוצג רק כשזה False. אירוע משפחתי או חג שנראה כמו
+    # פגישת עבודה מרוקן את ההכרעה לקרוא גם אותם
+    from_primary: bool = True
+    # ⚠️ אירוע של כל היום אין לו שעה בכלל, ולכן ``day`` ולא ``start``.
+    # להמיר אותו ל-00:00 היה מציג חג בראש היום כאילו הוא פגישה
+    all_day: bool = False
+    start: datetime | None = None
+    end: datetime | None = None
+    day: date | None = None
+    location: str = ""
+    attendees: list[str] = []
+
+
+class CalendarOut(BaseModel):
+    """הטווח שנשלף, היומנים שנקראו, והאירועים.
+
+    ⚠️ **``today`` נקבע בשרת ולא בדפדפן.** השרת הוא זה שמחזיק את
+    ``Asia/Jerusalem``, ודפדפן באזור זמן אחר היה מדגיש את העמודה הלא
+    נכונה — שגיאה שקטה שאי אפשר לראות בבדיקה מקומית.
+    """
+
+    start: date
+    days: int
+    today: date
+    calendars: list[CalendarRefOut] = []
+    events: list[CalendarEventOut] = []
