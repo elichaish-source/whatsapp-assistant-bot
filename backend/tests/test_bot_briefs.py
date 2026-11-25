@@ -152,13 +152,37 @@ def test_a_meeting_with_no_client_at_all_has_no_client(db, connected):
 
 def test_the_brief_names_the_open_tasks(db, connected):
     owner = client(db)
-    today = datetime.now(tz=IL).date()
-    task(db, owner, "להעביר כרטסת", due=today)
+    event = soon()
+    task(db, owner, "להעביר כרטסת", due=event.start.date())
     task(db, owner, "לבדוק את ההסכם")
-    text = briefs.compose(db, soon(), owner, None)
+    text = briefs.compose(db, event, owner, None)
     assert "להעביר כרטסת" in text
     assert "לבדוק את ההסכם" in text
-    assert f"{today:%d/%m}" in text
+    assert f"עד {event.start:%d/%m}" in text
+
+
+def test_a_task_whose_date_has_passed_says_it_is_late(db, connected):
+    """⚠️⚠️ נמצא מול הנתונים האמיתיים: התדריך הראה "עד 19/11" על פגישה
+    ב-25/11 — איחור של שישה ימים שהוצג כיעד עתידי.
+
+    ⚠️ ההשוואה מול **יום הפגישה** ולא מול ``now()``, ולכן הבדיקה
+    דטרמיניסטית ולא תלויה בשעה שבה היא רצה.
+    """
+    owner = client(db)
+    event = soon()
+    late = event.start.date() - timedelta(days=6)
+    task(db, owner, "להעביר כרטסת", due=late)
+    text = briefs.compose(db, event, owner, None)
+    assert f"באיחור מ-{late:%d/%m}" in text
+    assert "(עד" not in text
+
+
+def test_a_task_without_a_date_shows_no_date(db, connected):
+    owner = client(db)
+    task(db, owner, "בלי תאריך")
+    text = briefs.compose(db, soon(), owner, None)
+    assert "בלי תאריך" in text
+    assert "באיחור" not in text and "(עד" not in text
 
 
 def test_many_tasks_are_counted_and_not_all_listed(db, connected):
