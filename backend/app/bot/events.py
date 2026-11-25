@@ -326,7 +326,9 @@ def add_event(db: Session, intent: Intent) -> Outcome:
         # שולחת בשם המשתמש אינה הפיכה. הפעולה נשמרת ב-pending_json
         # והיצירה קורית ב-confirm, שנקרא מההודעה הקודמת ולא מהמודל
         return Outcome(
-            f"לקבוע «{title}» {_slot(begins)} ולשלוח הזמנה ל-{name} ({guest})?\n"
+            # ⚠️ "לאבי" ולא "ל-אבי": מקף לפני שם עברי נראה כשגיאה. הוא
+            # נשאר לפני כתובת מייל, שם הוא דווקא עוזר לקרוא
+            f"לקבוע «{title}» {_slot(begins)} ולשלוח הזמנה ל{name} ({guest})?\n"
             "⚠️ הזמנה שיצאה אי אפשר להחזיר. לאישור כתוב «כן».",
             pending={
                 "kind": "add_event",
