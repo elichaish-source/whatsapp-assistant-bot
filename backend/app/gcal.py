@@ -433,26 +433,30 @@ def next_free(
     limit = after + timedelta(days=days)
     taken = busy(db, after, limit)
 
+    def opens(day: date) -> datetime:
+        return datetime.combine(day, time(hour=DAY_START), tzinfo=tz)
+
+    def closes(day: date) -> datetime:
+        return datetime.combine(day, time(hour=DAY_END), tzinfo=tz)
+
     moment = after.astimezone(tz).replace(second=0, microsecond=0)
     # מעגלים לרבע שעה הבאה, כדי לא להציע 10:07
-    extra = (-moment.minute) % SLOT_MINUTES
-    moment += timedelta(minutes=extra)
+    moment += timedelta(minutes=(-moment.minute) % SLOT_MINUTES)
 
     while moment < limit:
-        if moment.weekday() == SATURDAY or moment.hour < DAY_START:
-            moment = datetime.combine(
-                moment.date() + timedelta(days=1 if moment.hour >= DAY_START else 0),
-                time(hour=DAY_START),
-                tzinfo=tz,
-            )
-            if moment.weekday() == SATURDAY:
-                moment += timedelta(days=1)
+        # ⚠️⚠️ **הגבולות נשמרים כזמנים ולא כשעות.** בגרסה הראשונה הבדיקה
+        # הייתה על ``finish.hour``, ובקשה ב-23:00 נתנה סיום ב-00:00 —
+        # ‏`0 > 19` הוא False, ולכן **23:00 נראה כחלון פנוי תקין.**
+        # נתפס בבדיקה שנכתבה בדיוק בשביל זה
+        if moment < opens(moment.date()):
+            moment = opens(moment.date())
+            continue
+        if moment >= closes(moment.date()) or moment.weekday() == SATURDAY:
+            moment = opens(moment.date() + timedelta(days=1))
             continue
         finish = moment + length
-        if finish.hour > DAY_END or (finish.hour == DAY_END and finish.minute):
-            moment = datetime.combine(
-                moment.date() + timedelta(days=1), time(hour=DAY_START), tzinfo=tz
-            )
+        if finish > closes(moment.date()):
+            moment = opens(moment.date() + timedelta(days=1))
             continue
         if not any(start < finish and end > moment for start, end in taken):
             return moment
@@ -480,7 +484,11 @@ def create(
     ⚠️ **האירוע נוצר ביומן הראשי בלבד.** קביעה ביומן המשפחתי או בחדר
     הישיבות לא הוכרעה, וחדר הישיבות אינו של המשתמש בכלל (reader).
     """
-    guests = [address for address in (attendees or []) if address]
+    # ⚠️⚠️ ``.strip()`` ולא רק ``if address``. מחרוזת של רווחים היא
+    # truthy בפייתון, ולכן בלעדיו `[" "]` היה מדליק ``sendUpdates="all"``
+    # ושולח הזמנה לכתובת ריקה — **פעולה שאינה הפיכה, על קלט זבל.**
+    # נתפס בבדיקה שנכתבה בדיוק בשביל זה
+    guests = [address.strip() for address in (attendees or []) if address and address.strip()]
     body: dict = {
         "summary": title,
         "start": {"dateTime": begins.isoformat(), "timeZone": str(local_tz())},
