@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # "להציג", כי אירוע שנעלם בשקט הוא הכשל היחיד שאסור
     calendar_skip: str = ""
 
+    # --- התדריך לפני פגישה (שלב 4ב-3) ---
+    # כמה דקות לפני הפגישה יוצא התדריך. ⚠️ הוכרע 45 (25.11.2026): מספיק
+    # זמן להסתכל ולהיזכר, ולא מוקדם מדי כדי שתשכח עד הפגישה
+    brief_minutes: int = 45
+
     session_days: int = 30
     login_code_minutes: int = 5
     login_code_max_attempts: int = 5

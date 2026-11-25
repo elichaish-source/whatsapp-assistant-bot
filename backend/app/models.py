@@ -391,3 +391,20 @@ class EmailAlert(Base):
     # ‏waiting = מישהו מחכה לתשובה ממך; silent = מישהו לא ענה לך
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     alerted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventBrief(Base):
+    """על איזו פגישה הבוט כבר תדרך (שלב 4ב-3).
+
+    ⚠️⚠️ **בלי זה התדריך היה יוצא בכל סבב** באותן 45 דקות שלפני
+    הפגישה — תשע הודעות על פגישה אחת. אותו שיקול של ``EmailAlert``.
+
+    ⚠️ **מזהה אירוע בלבד ולא תוכן** — תוכן היומן אינו משוקף למסד.
+    """
+
+    __tablename__ = "event_briefs"
+    __table_args__ = (UniqueConstraint("event_id", name="event_brief_once"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    briefed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
