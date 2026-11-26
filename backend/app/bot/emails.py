@@ -276,7 +276,7 @@ def _render(mail: gmail.EmailFull) -> str:
     ]
     if mail.attachments:
         # שמות בלבד. הקבצים עצמם אינם מורדים ואינם נשמרים
-        head.append("מצורף: " + ", ".join(mail.attachments[:5]))
+        head.append("מצורף: " + ", ".join(one.name for one in mail.attachments[:5]))
 
     if not mail.body.strip():
         return "\n".join(head) + "\n\n(המייל ריק)"
