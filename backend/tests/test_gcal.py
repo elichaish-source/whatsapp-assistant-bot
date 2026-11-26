@@ -10,6 +10,8 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app import gcal
 from app.config import get_settings
 
@@ -338,19 +340,70 @@ def test_a_session_is_never_used_inside_the_threads(db, monkeypatch):
 # --- מה לא נעשה כאן, ויש בדיקה שתשמור על זה ---
 
 
-def test_the_calendar_layer_never_modifies_an_existing_event(monkeypatch):
-    """⚠️ ‏4ב-2 יוצרת ומוחקת, **ואינה משנה אירוע קיים.**
+def test_the_calendar_layer_never_replaces_a_whole_event(monkeypatch):
+    """⚠️⚠️ **``PUT`` נשאר אסור, גם אחרי שהמסך קיבל עריכה.**
 
-    עד 4ב-1 הבדיקה הזאת אסרה כל כתיבה. היא נפתחה במכוון: ``freeBusy``
-    הוא POST שאינו כותב, ``events.insert`` הוא POST שכן, ו-``delete``
-    נחוץ ל"בטל". **מה שנשאר אסור הוא PATCH ו-PUT** — שינוי של אירוע
-    שהבוט לא יצר הוא 4ב-3 ואילך, ובלי הגדרה הוא עלול לדרוס פגישה.
+    הבדיקה הזאת נפתחה פעמיים, ובכל פעם **במדויק**: ב-4ב-1 היא אסרה כל
+    כתיבה, ונפתחה ל-``freeBusy`` (POST שאינו כותב), ל-``insert``
+    ול-``delete``; ב-26.11.2026 היא נפתחה ל-``PATCH``, כשהמשתמש בחר
+    ביודעין שהמסך יוכל לשנות פגישות.
+
+    **``PUT`` לא נפתח, והסיבה אינה זהירות כללית:** ‏``PUT`` מחליף את
+    המשאב כולו, ולכן כל שדה שלא נשלח **נמחק בשקט** — כלל החזרה של
+    פגישה חוזרת, התזכורות, קישור ה-Meet, וכל מה שהמשתמש הגדיר ביד
+    ביומן גוגל. ‏``PATCH`` נוגע רק במה שנשלח, ולכן הוא היחיד שמותר.
     """
     source = (gcal.__file__ or "").replace(".pyc", ".py")
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    for verb in ("httpx.put", "httpx.patch"):
-        assert verb not in text, verb
+    # ⚠️ הקריאה עצמה, ולא האזכור: ההסבר למעלה מזכיר את השם בכוונה
+    assert "httpx.put(" not in text
+    # ⚠️ וגם לא דרך הדלת האחורית של ``request``
+    assert 'method="PUT"' not in text and "'PUT'" not in text
+
+
+def test_a_write_to_a_calendar_that_is_read_only_is_refused(monkeypatch, db):
+    """⚠️⚠️ **חדר הישיבות והחגים אינם ניתנים לעריכה, והשרת אוכף זאת.**
+
+    המסך מסתיר את הכפתור, אבל בקשה אפשר לשלוח גם בלעדיו — ומה שגוגל
+    הייתה מחזירה הוא 403 גולמי, שנראה למשתמש כתקלה ולא כאיסור.
+    """
+    monkeypatch.setattr(
+        gcal,
+        "calendars",
+        lambda session, owned_only=True: [
+            gcal.Calendar(id="me@gmail.com", name="שלי", primary=True, writable=True),
+            gcal.Calendar(id="room@group.calendar.google.com", name="חדר", writable=False),
+        ],
+    )
+    assert gcal.writable_id(db, "me@gmail.com") == "me@gmail.com"
+    with pytest.raises(gcal.ReadOnlyCalendar):
+        gcal.writable_id(db, "room@group.calendar.google.com")
+    with pytest.raises(gcal.ReadOnlyCalendar):
+        gcal.writable_id(db, "nobody@group.calendar.google.com")
+
+
+def test_an_event_carries_its_series_id_and_etag(monkeypatch):
+    """⚠️⚠️ בלי מזהה הסדרה אי אפשר לענות על "כל הסדרה".
+
+    ‏``singleEvents=true`` מחזיר מופעים, ולכן ``id`` הוא של המופע —
+    וכמעט כל הפגישות ביומן האמיתי חוזרות.
+    """
+    raw = {
+        "id": "abc_20261127T090000Z",
+        "summary": "פגישה שבועית",
+        "recurringEventId": "abc",
+        "etag": '"3456"',
+        "start": {"dateTime": "2026-11-27T09:00:00+02:00"},
+        "end": {"dateTime": "2026-11-27T10:00:00+02:00"},
+    }
+    parsed = gcal._parse(raw, "שלי")
+    assert parsed is not None
+    assert parsed.recurring_id == "abc"
+    assert parsed.etag == '"3456"'
+    # אירוע רגיל אינו "סדרה"
+    plain = gcal._parse({**raw, "recurringEventId": None}, "שלי")
+    assert plain is not None and plain.recurring_id == ""
 
 
 def test_the_calendar_layer_calls_no_model(monkeypatch):

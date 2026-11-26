@@ -1,6 +1,7 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api, query } from "../api";
+import EventForm from "../components/EventForm";
 import Modal from "../components/Modal";
 import {
   dayKey,
@@ -15,7 +16,9 @@ import {
   CALENDAR_VIEW_LABELS,
   type CalendarData,
   type CalendarEvent,
+  type CalendarPerson,
   type CalendarView,
+  type EventDraft,
 } from "../types";
 
 /**
@@ -54,6 +57,21 @@ const NARROW = 720;
 
 /** כמה דקות אירוע תופס בלוח גם כשהוא קצר יותר, כדי שיישאר נקרא */
 const MIN_SLOT = 25;
+
+/** לאיזה רבע שעה גרירה ולחיצה על משבצת ריקה מתיישרות */
+const SNAP = 15;
+
+/** אורך ברירת מחדל לפגישה חדשה. ⚠️ נמדד ביומן האמיתי: 11 מתוך 17 בנות שעה */
+const DEFAULT_MINUTES = 60;
+
+/** כמה פיקסלים צריך לזוז כדי שזאת תהיה גרירה ולא לחיצה */
+const DRAG_START = 5;
+
+/** "HH:MM" מדקות מתחילת היום, לשדה `type="time"` */
+function clock(minutes: number): string {
+  const whole = Math.max(0, Math.min(24 * 60 - 1, Math.round(minutes)));
+  return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
+}
 
 type Placed = { event: CalendarEvent; lane: number; lanes: number };
 
@@ -114,6 +132,21 @@ export default function Calendar() {
   // 503 = צריך לחבר את גוגל בהגדרות. 502 = תקלה, אפשר לנסות שוב
   const [needsConnection, setNeedsConnection] = useState(false);
   const [open, setOpen] = useState<CalendarEvent | null>(null);
+  // טופס פגישה: `id` ריק = חדשה, מלא = שינוי של קיימת
+  const [form, setForm] = useState<EventDraft | null>(null);
+  const [people, setPeople] = useState<CalendarPerson[]>([]);
+  const [toast, setToast] = useState("");
+  // פגישה שממתינה לאישור מחיקה, והאם למחוק את כל הסדרה
+  const [removing, setRemoving] = useState<CalendarEvent | null>(null);
+  const [removeSeries, setRemoveSeries] = useState(false);
+  const [working, setWorking] = useState(false);
+  // האירוע שנגרר כרגע, והאפשרות להחזיר את הגרירה האחרונה
+  const [dragging, setDragging] = useState("");
+  const [undo, setUndo] = useState<{
+    event: CalendarEvent;
+    body: { day: string; start_time: string; end_time: string };
+  } | null>(null);
+  const dragged = useRef(false);
 
   const days = SPAN[view];
   // בתצוגת שבוע הטווח מתחיל ביום ראשון ולא ביום שנבחר, אחרת הלוח היה
@@ -146,6 +179,188 @@ export default function Calendar() {
     const next = fromDateValue(anchor);
     next.setDate(next.getDate() + step * days);
     setAnchor(toDateValue(next));
+  };
+
+  // ⚠️ הלקוחות נטענים פעם אחת ולא בכל דפדוף: הם אינם תלויים בטווח,
+  // ובורר המשתתפים צריך אותם רק כשנפתח טופס
+  useEffect(() => {
+    api<CalendarPerson[]>("/calendar/people")
+      .then(setPeople)
+      // ⚠️ כישלון כאן אינו מפיל את המסך: אפשר להקליד כתובת ביד
+      .catch(() => setPeople([]));
+  }, []);
+
+  /** האם מותר לכתוב ליומן שהאירוע יושב בו */
+  const editable = useCallback(
+    (event: CalendarEvent) =>
+      (data?.calendars ?? []).some((cal) => cal.id === event.calendar_id && cal.writable),
+    [data],
+  );
+
+  const firstWritable = () =>
+    (data?.calendars ?? []).find((cal) => cal.primary && cal.writable)?.id ??
+    (data?.calendars ?? []).find((cal) => cal.writable)?.id ??
+    "";
+
+  /** טיוטה מאירוע קיים, לפתיחת טופס השינוי */
+  const draftOf = (event: CalendarEvent): EventDraft => {
+    const begins = new Date(event.start!);
+    const minutes = minutesOfDay(begins);
+    const ends = event.end ? minutesOfDay(new Date(event.end)) : minutes + DEFAULT_MINUTES;
+    return {
+      id: event.id,
+      title: event.title,
+      day: dayKey(begins),
+      from: clock(minutes),
+      to: clock(ends > minutes ? ends : minutes + DEFAULT_MINUTES),
+      calendar_id: event.calendar_id,
+      location: event.location,
+      description: event.description,
+      // ⚠️ `attendees` הם שמות אחרי שכרטיס הלקוח החליף בהם כתובת, ולכן
+      // רק מה שנראה ככתובת חוזר לטופס — שם לא היה מזהה אף אחד בגוגל
+      attendees: event.attendees.filter((one) => one.includes("@")),
+      recurring: event.recurring,
+      etag: event.etag,
+    };
+  };
+
+  /** טיוטה ריקה ליום ולשעה שנלחצו */
+  const blankDraft = (dayValue: string, minutes: number): EventDraft => ({
+    id: "",
+    title: "",
+    day: dayValue,
+    from: clock(minutes),
+    to: clock(minutes + DEFAULT_MINUTES),
+    calendar_id: firstWritable(),
+    location: "",
+    description: "",
+    attendees: [],
+    recurring: false,
+    etag: "",
+  });
+
+  const saved = (message: string) => {
+    setForm(null);
+    setOpen(null);
+    setToast(message);
+    load();
+  };
+
+  /**
+   * גרירת פגישה לשעה או ליום אחרים.
+   *
+   * ⚠️ **היעד נקרא מהעמודה שמתחת לסמן** (`data-day`), ולא מחישוב של
+   * רוחב עמודה — בממשק מימין לשמאל חישוב כזה מתהפך, והפגישה הייתה
+   * נוחתת ביום המשוקף.
+   *
+   * ⚠️⚠️ **גרירה שולחת `force`, והטופס לא.** חפיפה ביומן היא מצב
+   * לגיטימי — המסך עצמו מצייר פגישות חופפות זו לצד זו — ומי שגורר
+   * לשעה תפוסה רואה בדיוק לאן הוא גורר. בטופס, לעומת זאת, השעה
+   * מוקלדת והמשתמש אינו רואה מה כבר שם, ולכן שם נשאלת שאלה.
+   *
+   * ⚠️ **מופע בודד בלבד.** גרירה של פגישה חוזרת מזיזה את המופע הזה,
+   * וההודעה אומרת זאת — להזיז סדרה שלמה בגרירה אחת זה בדיוק סוג
+   * הפעולה שאי אפשר לשים לב שעשית.
+   */
+  const startDrag = (e: React.PointerEvent, event: CalendarEvent) => {
+    if (!editable(event) || !event.start || event.all_day) return;
+    const column = (e.currentTarget as HTMLElement).closest(".cal-col") as HTMLElement | null;
+    if (!column) return;
+    const began = minutesOfDay(new Date(event.start));
+    const ended = event.end ? minutesOfDay(new Date(event.end)) : began + DEFAULT_MINUTES;
+    const length = ended > began ? ended - began : DEFAULT_MINUTES;
+    const minuteAt = (y: number, box: DOMRect) =>
+      fromHour * 60 + ((y - box.top) / box.height) * gridMinutes;
+    const grab = minuteAt(e.clientY, column.getBoundingClientRect()) - began;
+    let moved = false;
+
+    const onMove = (m: PointerEvent) => {
+      if (Math.abs(m.clientY - e.clientY) > DRAG_START || Math.abs(m.clientX - e.clientX) > DRAG_START) {
+        moved = true;
+        setDragging(event.id);
+      }
+    };
+    const onUp = async (u: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDragging("");
+      if (!moved) return;
+      // ⚠️ הלחיצה מגיעה אחרי ה-pointerup, ובלי הדגל הזה כל גרירה
+      // הייתה גם פותחת את חלון הפרטים
+      dragged.current = true;
+      const under = (document.elementFromPoint(u.clientX, u.clientY) as HTMLElement | null)
+        ?.closest(".cal-col") as HTMLElement | null;
+      const landed = under ?? column;
+      const dayValue = landed.dataset.day ?? dayKey(new Date(event.start!));
+      const raw = minuteAt(u.clientY, landed.getBoundingClientRect()) - grab;
+      const from = Math.max(0, Math.round(raw / SNAP) * SNAP);
+      if (dayValue === dayKey(new Date(event.start!)) && from === began) return;
+      const was = {
+        day: dayKey(new Date(event.start!)),
+        start_time: clock(began),
+        end_time: clock(began + length),
+      };
+      const now = { day: dayValue, start_time: clock(from), end_time: clock(from + length) };
+      try {
+        await api(`/calendar/events/${encodeURIComponent(event.id)}`, {
+          method: "PATCH",
+          body: { ...now, calendar_id: event.calendar_id, etag: event.etag, force: true },
+        });
+        setUndo({ event, body: was });
+        setToast(
+          event.recurring
+            ? `הפגישה הזאת הוזזה ל-${now.start_time} (רק המופע הזה)`
+            : `הפגישה הוזזה ל-${now.start_time}`,
+        );
+        load();
+      } catch (err) {
+        setToast((err as Error).message);
+        load();
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  /** מחזיר פגישה שנגררה למקום שממנו באה */
+  const undoDrag = async () => {
+    if (!undo) return;
+    const { event, body } = undo;
+    setUndo(null);
+    try {
+      await api(`/calendar/events/${encodeURIComponent(event.id)}`, {
+        method: "PATCH",
+        body: { ...body, calendar_id: event.calendar_id, force: true },
+      });
+      setToast("הוחזר");
+    } catch (e) {
+      setToast((e as Error).message);
+    }
+    load();
+  };
+
+  const remove = async () => {
+    if (!removing) return;
+    setWorking(true);
+    try {
+      await api(
+        `/calendar/events/${encodeURIComponent(removing.id)}${query({
+          calendar_id: removing.calendar_id,
+          whole_series: removeSeries,
+          // ⚠️ הודעת ביטול יוצאת רק כשהיו משתתפים. ההזמנה שכבר נשלחה
+          // אינה נמחקת מהתיבה שלהם, אבל היא מסומנת כמבוטלת
+          notify: removing.attendees.length > 0,
+        })}`,
+        { method: "DELETE" },
+      );
+      setRemoving(null);
+      saved(removeSeries ? "כל הסדרה בוטלה" : "הפגישה בוטלה");
+    } catch (e) {
+      setRemoving(null);
+      setToast((e as Error).message);
+    } finally {
+      setWorking(false);
+    }
   };
 
   /**
@@ -271,8 +486,8 @@ export default function Calendar() {
     <div>
       <h1>יומן</h1>
       <p className="muted">
-        הפגישות מהיומן הראשי, מהיומן המשפחתי, מחדר הישיבות ומהחגים — מה שהבוט עונה עליו ועוד.
-        ⚠️ קריאה בלבד: אי אפשר לשנות כאן אירוע. פגישה חדשה נקבעת דרך הבוט בוואטסאפ. ⚠️ שום
+        הפגישות מהיומן הראשי, מהיומן המשפחתי, מחדר הישיבות ומהחגים. אפשר לקבוע פגישה, לגרור
+        אותה לשעה אחרת, לשנות ולמחוק — ⚠️ חוץ מחדר הישיבות והחגים, שהם לקריאה בלבד. ⚠️ שום
         תוכן יומן אינו נשמר — הוא נקרא מגוגל ברגע שאתה פותח את המסך.
       </p>
 
@@ -289,10 +504,35 @@ export default function Calendar() {
           הבא
         </button>
         <span className="cal-range">{range()}</span>
+        {/* ⚠️ הכפתור מופיע רק כשיש יומן שמותר לכתוב אליו. חדר הישיבות
+            והחגים הם reader, ולחיצה עליהם הייתה מחזירה 403 מגוגל */}
+        {firstWritable() && (
+          <button
+            className="primary"
+            onClick={() => setForm(blankDraft(today || toDateValue(new Date()), 9 * 60))}
+          >
+            פגישה חדשה
+          </button>
+        )}
         <button className="link-btn" onClick={load} disabled={loading}>
           רענון
         </button>
       </div>
+
+      {/* הודעה אחרי פעולה, עם החזרה של הגרירה האחרונה */}
+      {toast && (
+        <div className="card cal-toast">
+          <span>{toast}</span>
+          {undo && (
+            <button className="link-btn" onClick={undoDrag}>
+              ביטול
+            </button>
+          )}
+          <button className="link-btn" onClick={() => { setToast(""); setUndo(null); }}>
+            סגירה
+          </button>
+        </div>
+      )}
 
       {/* התצוגות. ⚠️ החלפה אינה פונה לגוגל כשהטווח לא השתנה */}
       <div className="when-tabs" role="tablist" aria-label="תצוגה">
@@ -428,8 +668,19 @@ export default function Calendar() {
               return (
                 <div
                   key={`col-${key}`}
+                  data-day={key}
                   className={key === today ? "cal-col on" : "cal-col"}
                   style={{ height: `${hours.length * HOUR_PX}px` }}
+                  /* ⚠️ רק לחיצה על משבצת ריקה פותחת פגישה חדשה: לחיצה
+                     על אירוע מגיעה לכאן בבועה, ובלי הבדיקה כל פתיחה של
+                     פגישה קיימת הייתה גם פותחת טופס חדש מתחתיה */
+                  onClick={(e) => {
+                    const slot = e.target as HTMLElement;
+                    if (!slot.classList.contains("cal-slot") || !firstWritable()) return;
+                    const box = e.currentTarget.getBoundingClientRect();
+                    const at = fromHour * 60 + ((e.clientY - box.top) / box.height) * gridMinutes;
+                    setForm(blankDraft(key, Math.round(at / SNAP) * SNAP));
+                  }}
                 >
                   {hours.map((hour) => (
                     <div key={hour} className="cal-slot" />
@@ -438,8 +689,17 @@ export default function Calendar() {
                   {placed.map(({ event, lane, lanes }) => (
                     <button
                       key={event.id}
-                      className={`cal-event ${tone(event)}`}
-                      onClick={() => setOpen(event)}
+                      className={`cal-event ${tone(event)}${
+                        dragging === event.id ? " dragging" : ""
+                      }${editable(event) ? " movable" : ""}`}
+                      onPointerDown={(e) => startDrag(e, event)}
+                      onClick={() => {
+                        if (dragged.current) {
+                          dragged.current = false;
+                          return;
+                        }
+                        setOpen(event);
+                      }}
                       style={{
                         ...box(event),
                         // ⚠️ מימין לשמאל: ההיסט נמדד מימין, כי העמודה
@@ -505,8 +765,30 @@ export default function Calendar() {
             {/* ⚠️ קישור ליום ביומן גוגל ולא לאירוע עצמו: כתובת של אירוע
                 בודד בנויה מקידוד של המזהה ושל היומן ונשברת בלי להודיע,
                 וכתובת של יום עובדת תמיד */}
+            {open.description && <p className="pre-line">{open.description}</p>}
+
+            {/* ⚠️ כפתורי השינוי רק על יומן שמותר לכתוב אליו. חדר
+                הישיבות והחגים הם reader, והשרת גם הוא פוסל אותם — זה
+                אינו נשען על כך שהכפתור הוסתר */}
+            {editable(open) && !open.all_day && (
+              <div className="row">
+                <button className="primary" onClick={() => setForm(draftOf(open))}>
+                  שינוי
+                </button>
+                <button
+                  className="danger"
+                  onClick={() => {
+                    setRemoveSeries(false);
+                    setRemoving(open);
+                  }}
+                >
+                  מחיקה
+                </button>
+              </div>
+            )}
+
             <p className="muted">
-              לשינוי או למחיקה —{" "}
+              אפשר גם{" "}
               <a
                 href={
                   openDay
@@ -516,10 +798,68 @@ export default function Calendar() {
                 target="_blank"
                 rel="noreferrer"
               >
-                פתח את היום ביומן גוגל
+                לפתוח את היום ביומן גוגל
               </a>
-              . המסך הזה הוא קריאה בלבד.
+              .
             </p>
+          </div>
+        </Modal>
+      )}
+
+      {form && (
+        <EventForm
+          draft={form}
+          calendars={data?.calendars ?? []}
+          people={people}
+          onClose={() => setForm(null)}
+          onSaved={saved}
+        />
+      )}
+
+      {removing && (
+        <Modal title="לבטל את הפגישה?" onClose={() => setRemoving(null)}>
+          <div className="details">
+            <p>
+              <strong>{removing.title}</strong>
+              {removing.start && ` · ${formatTime(removing.start)}`}
+            </p>
+            {/* ⚠️⚠️ אותה שאלה כמו בשינוי, ומאותה סיבה: כמעט כל הפגישות
+                ביומן האמיתי חוזרות, ומחיקת סדרה נוגעת גם בפגישות שלא
+                נראו על המסך */}
+            {removing.recurring && (
+              <fieldset className="scope">
+                <legend>הפגישה הזאת חוזרת. מה למחוק?</legend>
+                <label className="inline">
+                  <input
+                    type="radio"
+                    checked={!removeSeries}
+                    onChange={() => setRemoveSeries(false)}
+                  />
+                  רק הפגישה הזאת
+                </label>
+                <label className="inline">
+                  <input
+                    type="radio"
+                    checked={removeSeries}
+                    onChange={() => setRemoveSeries(true)}
+                  />
+                  כל הסדרה
+                </label>
+              </fieldset>
+            )}
+            {removing.attendees.length > 0 && (
+              <p className="warn">
+                ⚠️ למשתתפים תישלח הודעת ביטול. ההזמנה שכבר קיבלו אינה נמחקת מהתיבה שלהם.
+              </p>
+            )}
+            <div className="row">
+              <button className="danger" onClick={remove} disabled={working}>
+                {working ? "מוחק…" : "מחיקה"}
+              </button>
+              <button onClick={() => setRemoving(null)} disabled={working}>
+                חזרה
+              </button>
+            </div>
           </div>
         </Modal>
       )}

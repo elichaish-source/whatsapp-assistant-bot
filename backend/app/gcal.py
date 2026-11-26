@@ -70,8 +70,17 @@ OWNED = ("owner",)
 # "משימות" נשאר בחוץ בשני המסלולים.
 READABLE = ("owner", "writer", "reader")
 
-# ⚠️ **אירוע נוצר ביומן הראשי בלבד.** קביעה ביומן המשפחתי לא הוכרעה,
-# וחדר הישיבות אינו של המשתמש כלל (הרשאת reader)
+# ⚠️⚠️ **לאן מותר לכתוב, ולמה זה לא אותה רשימה כמו קריאה** (נוסף
+# 26.11.2026, כשהמסך קיבל יצירה ועריכה). המסך מציג ארבעה יומנים, ושניים
+# מהם מגיעים בהרשאת ``reader`` — חדר הישיבות שאינו של המשתמש, ויומן
+# החגים של גוגל. **כפתור "שינוי" על אירוע כזה היה מייצר 403 מגוגל
+# בלחיצה**, וגרוע מזה: גרירה שלו הייתה נראית כאילו הצליחה עד הרענון
+# הבא. לכן ``writable`` נגזר מההרשאה שגוגל מחזירה, והשרת בודק אותו שוב
+# לפני כל כתיבה — **לא מסתמך על כך שהמסך הסתיר את הכפתור.**
+WRITABLE = ("owner", "writer")
+
+# ⚠️ **ברירת המחדל ליצירה.** הבוט יוצר ביומן הראשי בלבד; המסך מרשה
+# לבחור, אבל רק מתוך ``WRITABLE``
 PRIMARY = "primary"
 
 # אורך פגישה כשהמשתמש לא אמר. ⚠️ **נגזר מהיומן האמיתי ולא מניחוש:**
@@ -92,6 +101,24 @@ class CalendarError(Exception):
     """היומן לא נגיש כרגע: רשת, או תשובה לא צפויה מגוגל."""
 
 
+class ReadOnlyCalendar(CalendarError):
+    """ניסיון לכתוב ליומן שאין בו הרשאת כתיבה, או שאינו ברשימה.
+
+    ⚠️ **שגיאה נפרדת כי התשובה למשתמש שונה לגמרי.** זה אינו "נסה שוב
+    בעוד רגע" — זה מצב שלא ישתנה מעצמו, וחדר הישיבות לעולם לא יהיה
+    ניתן לעריכה מכאן.
+    """
+
+
+class EventChanged(CalendarError):
+    """האירוע השתנה בגוגל מאז שהמסך קרא אותו (``If-Match`` החזיר 412).
+
+    ⚠️⚠️ **זה בדיוק הסיכון שבגללו המסך היה קריאה בלבד עד 26.11.2026:**
+    עריכה של אירוע שהמערכת לא יצרה עלולה לדרוס שינוי של מישהו אחר.
+    ‏``If-Match`` הופך את הדריסה השקטה לשגיאה שאפשר להציג.
+    """
+
+
 @dataclass
 class Created:
     """האירוע שנוצר. ⚠️ ``invited`` קובע אם "בטל" ישלח הודעת ביטול."""
@@ -107,6 +134,9 @@ class Calendar:
     id: str
     name: str
     primary: bool = False
+    # ⚠️ **האם מותר לכתוב ליומן הזה** (``owner`` או ``writer``). נגזר
+    # מגוגל ולא מניחוש: חדר הישיבות והחגים הם ``reader``
+    writable: bool = False
 
 
 @dataclass
@@ -140,6 +170,16 @@ class Event:
     attendees: list[str] = field(default_factory=list)
     # ⚠️ כתובות המשתתפים, באותיות קטנות. לזיהוי בקוד ולא להצגה
     emails: list[str] = field(default_factory=list)
+    description: str = ""
+    # ⚠️⚠️ **מזהה הסדרה, כשהאירוע הוא מופע של פגישה חוזרת** (נוסף
+    # 26.11.2026). ``singleEvents=true`` מחזיר מופעים, ולכן ``id`` הוא
+    # של **המופע** — ושינוי לפיו משנה פגישה אחת. **וכמעט כל הפגישות
+    # ביומן האמיתי חוזרות**, ולכן "הפגישה הזאת או כל הסדרה" אינו מקרה
+    # קצה אלא המקרה הרגיל, ובלי המזהה הזה אי אפשר לענות עליו בכלל
+    recurring_id: str = ""
+    # ⚠️ חתימת הגרסה של גוגל, ל-``If-Match`` בעדכון. בלעדיה שני מסכים
+    # פתוחים דורסים זה את זה בשקט
+    etag: str = ""
 
     @property
     def when(self) -> date:
@@ -273,6 +313,7 @@ def calendars(db: Session, owned_only: bool = True) -> list[Calendar]:
                 id=cal_id,
                 name=item.get("summaryOverride") or item.get("summary") or cal_id,
                 primary=bool(item.get("primary")),
+                writable=item.get("accessRole") in WRITABLE,
             )
         )
     # הראשי קודם, ואחריו לפי שם — כדי שהסדר יהיה קבוע בין הרצות
@@ -313,6 +354,9 @@ def _parse(
         "location": (raw.get("location") or "").strip(),
         "attendees": attendees,
         "emails": [address for address in emails if address],
+        "description": (raw.get("description") or "").strip(),
+        "recurring_id": str(raw.get("recurringEventId") or ""),
+        "etag": str(raw.get("etag") or ""),
     }
 
     if start.get("date"):
@@ -577,7 +621,37 @@ def next_free(
     return None
 
 
-# --- יצירה ומחיקה ---
+# --- יצירה, שינוי ומחיקה ---
+
+
+def writable_id(db: Session, calendar_id: str = "") -> str:
+    """מאמת שמותר לכתוב ליומן המבוקש, ומחזיר את המזהה לשימוש.
+
+    ⚠️⚠️ **הבדיקה בשרת, ולא בכך שהמסך הסתיר את הכפתור.** המסך מציג גם
+    את חדר הישיבות ואת יומן החגים, שניהם בהרשאת ``reader``; בקשה אפשר
+    לשלוח גם בלי המסך, ומה שגוגל הייתה מחזירה הוא 403 גולמי — שנראה
+    למשתמש כתקלה ולא כאיסור.
+    """
+    wanted = (calendar_id or "").strip()
+    if not wanted or wanted == PRIMARY:
+        return PRIMARY
+    for cal in calendars(db, owned_only=False):
+        if cal.id != wanted:
+            continue
+        if not cal.writable:
+            raise ReadOnlyCalendar(f"אין הרשאת כתיבה ליומן {cal.name}")
+        return cal.id
+    raise ReadOnlyCalendar("היומן המבוקש אינו ברשימת היומנים")
+
+
+def _guests(attendees: list[str] | None) -> list[str]:
+    """כתובות המשתתפים, בלי ריקים.
+
+    ⚠️⚠️ ``.strip()`` **ולא רק** ``if address``. מחרוזת של רווחים היא
+    truthy בפייתון, ולכן בלעדיו ``[" "]`` היה מדליק ``sendUpdates="all"``
+    ושולח הזמנה לכתובת ריקה — **פעולה שאינה הפיכה, על קלט זבל.**
+    """
+    return [address.strip() for address in (attendees or []) if address and address.strip()]
 
 
 def create(
@@ -586,36 +660,47 @@ def create(
     begins: datetime,
     ends: datetime,
     attendees: list[str] | None = None,
+    calendar_id: str = PRIMARY,
+    location: str = "",
+    description: str = "",
+    notify: bool = True,
 ) -> Created:
-    """יוצר אירוע ביומן הראשי. ⚠️ מזמין משתתפים רק אם נמסרו במפורש.
+    """יוצר אירוע. ⚠️ מזמין משתתפים רק אם נמסרו במפורש.
 
     ⚠️⚠️ **``sendUpdates`` הוא הגבול היחיד כאן שאינו הפיך.** כשיש
     משתתפים גוגל שולחת מייל **בשם המשתמש**, ומחיקת האירוע לא מוציאה את
     ההזמנה מהתיבה של הנמען. לכן ``"all"`` רק כשיש משתתפים, ו-``"none"``
     אחרת — ויש בדיקה שאוכפת את שתי הצורות.
 
-    ⚠️ **האירוע נוצר ביומן הראשי בלבד.** קביעה ביומן המשפחתי או בחדר
-    הישיבות לא הוכרעה, וחדר הישיבות אינו של המשתמש בכלל (reader).
+    ⚠️ **ברירת המחדל היא היומן הראשי**, וזה מה שהבוט עושה. המסך רשאי
+    לבקש יומן אחר, אבל ``writable_id`` מוודא שמותר לכתוב אליו — חדר
+    הישיבות והחגים נפסלים שם.
+
+    ⚠️⚠️ **``notify`` אינו נוחות אלא אישור.** גוגל שולחת את ההזמנה
+    **בשם המשתמש**, ומחיקת האירוע לא מוציאה אותה מהתיבה של הנמען. הבוט
+    מגיע לכאן רק אחרי אישור מפורש, והמסך שואל לפני השמירה — ולכן
+    ``notify=False`` מוסיף משתתפים **בלי** לשלוח להם דבר.
     """
-    # ⚠️⚠️ ``.strip()`` ולא רק ``if address``. מחרוזת של רווחים היא
-    # truthy בפייתון, ולכן בלעדיו `[" "]` היה מדליק ``sendUpdates="all"``
-    # ושולח הזמנה לכתובת ריקה — **פעולה שאינה הפיכה, על קלט זבל.**
-    # נתפס בבדיקה שנכתבה בדיוק בשביל זה
-    guests = [address.strip() for address in (attendees or []) if address and address.strip()]
+    guests = _guests(attendees)
+    target = writable_id(db, calendar_id)
     body: dict = {
         "summary": title,
         "start": {"dateTime": begins.isoformat(), "timeZone": str(local_tz())},
         "end": {"dateTime": ends.isoformat(), "timeZone": str(local_tz())},
     }
+    if location.strip():
+        body["location"] = location.strip()
+    if description.strip():
+        body["description"] = description.strip()
     if guests:
         body["attendees"] = [{"email": address} for address in guests]
 
     token = gauth.access_token(db)
     try:
         response = httpx.post(
-            f"{API}/{_path(PRIMARY)}",
+            f"{API}/{_path(target)}",
             headers={"Authorization": f"Bearer {token}"},
-            params={"sendUpdates": "all" if guests else "none"},
+            params={"sendUpdates": "all" if guests and notify else "none"},
             json=body,
             timeout=TIMEOUT,
         )
@@ -631,17 +716,23 @@ def create(
     return Created(id=str(data.get("id") or ""), invited=bool(guests))
 
 
-def delete_event(db: Session, event_id: str, invited: bool = False) -> bool:
-    """מוחק אירוע שנוצר כאן. מחזיר False אם הוא כבר לא קיים.
+def delete_event(
+    db: Session, event_id: str, invited: bool = False, calendar_id: str = PRIMARY
+) -> bool:
+    """מוחק אירוע. מחזיר False אם הוא כבר לא קיים.
+
+    ⚠️ **מזהה של מופע מוחק פגישה אחת; מזהה של סדרה מוחק את כולה.**
+    מי שבוחר ביניהם הוא הקורא, אחרי ששאל את המשתמש — כאן אין ניחוש.
 
     ⚠️ **``sendUpdates="all"`` כשהיו משתתפים.** ההזמנה שיצאה אינה נמחקת
     מהתיבה של הנמען, אבל הודעת ביטול כן מגיעה אליו וההזמנה מסומנת
     כמבוטלת — זה הדבר הקרוב ביותר ל"בטל" שאפשר, ועדיף על שתיקה.
     """
     token = gauth.access_token(db)
+    target = writable_id(db, calendar_id)
     try:
         response = httpx.delete(
-            f"{API}/{_path(PRIMARY)}/{quote(event_id, safe='')}",
+            f"{API}/{_path(target)}/{quote(event_id, safe='')}",
             headers={"Authorization": f"Bearer {token}"},
             params={"sendUpdates": "all" if invited else "none"},
             timeout=TIMEOUT,
@@ -654,3 +745,105 @@ def delete_event(db: Session, event_id: str, invited: bool = False) -> bool:
         log.warning("מחיקת אירוע נכשלה: %s", response.status_code)
         raise CalendarError(f"גוגל החזירה {response.status_code}")
     return True
+
+
+def update_event(
+    db: Session,
+    event_id: str,
+    calendar_id: str = PRIMARY,
+    *,
+    title: str | None = None,
+    begins: datetime | None = None,
+    ends: datetime | None = None,
+    location: str | None = None,
+    description: str | None = None,
+    attendees: list[str] | None = None,
+    notify: bool = False,
+    etag: str = "",
+) -> Event | None:
+    """משנה אירוע קיים. מחזיר אותו אחרי השינוי, או None אם אינו קיים.
+
+    ⚠️⚠️ **``PATCH`` ולא ``PUT``, וזה הגבול שנשאר סגור.** ‏``PUT`` מחליף
+    את המשאב כולו, ולכן כל שדה שלא נשלח **נמחק בשקט** — כלל החזרה של
+    פגישה חוזרת, התזכורות, קישור ה-Meet וההגדרות שהמשתמש קבע ביד.
+    ‏``PATCH`` נוגע רק במה שנשלח. יש בדיקה שתיפול אם מישהו יוסיף
+    ``httpx.put``, והיא לא נפתחה ב-26.11.2026 אלא צומצמה בכוונה.
+
+    ⚠️⚠️ **``event_id`` של מופע משנה פגישה אחת; של סדרה משנה את כולן.**
+    ‏``singleEvents=true`` מחזיר מופעים, וכמעט כל הפגישות ביומן האמיתי
+    חוזרות — ולכן זו השאלה הראשונה שנשאלת, ולא ברירת מחדל שקטה.
+
+    ⚠️ **``If-Match`` עם ה-etag.** אם מישהו אחר שינה את האירוע מאז
+    שהמסך קרא אותו, גוגל מחזירה 412 ואנחנו מרימים ``EventChanged``
+    במקום לדרוס. זה בדיוק הסיכון שבגללו המסך היה קריאה בלבד.
+
+    ⚠️ **``None`` הוא "לא נגעת" ו-``""`` הוא "לרוקן".** בלי ההבחנה הזאת
+    עדכון שעה בלבד היה מוחק את המקום ואת התיאור.
+    """
+    target = writable_id(db, calendar_id)
+    body: dict = {}
+    if title is not None and title.strip():
+        body["summary"] = title.strip()
+    if begins is not None:
+        body["start"] = {"dateTime": begins.isoformat(), "timeZone": str(local_tz())}
+    if ends is not None:
+        body["end"] = {"dateTime": ends.isoformat(), "timeZone": str(local_tz())}
+    if location is not None:
+        body["location"] = location.strip()
+    if description is not None:
+        body["description"] = description.strip()
+    guests: list[str] = []
+    if attendees is not None:
+        guests = _guests(attendees)
+        body["attendees"] = [{"email": address} for address in guests]
+    if not body:
+        return None
+
+    headers = {"Authorization": f"Bearer {gauth.access_token(db)}"}
+    if etag.strip():
+        headers["If-Match"] = etag.strip()
+    try:
+        response = httpx.patch(
+            f"{API}/{_path(target)}/{quote(event_id, safe='')}",
+            headers=headers,
+            # ⚠️ הזמנה יוצאת רק כשהתבקשה **וגם** יש למי לשלוח. שינוי
+            # שעה של פגישה עם משתתפים מודיע להם — וזה רצוי — אבל רק
+            # אחרי שהמשתמש אישר במסך
+            params={"sendUpdates": "all" if notify and guests else "none"},
+            json=body,
+            timeout=TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise CalendarError(f"הפנייה ליומן נכשלה: {exc}") from exc
+    if response.status_code in (404, 410):
+        return None
+    if response.status_code == 412:
+        raise EventChanged("האירוע השתנה בגוגל מאז שהמסך קרא אותו")
+    if response.status_code >= 400:
+        log.warning("עדכון אירוע נכשל: %s", response.status_code)
+        raise CalendarError(f"גוגל החזירה {response.status_code}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise CalendarError("תשובה לא תקינה מגוגל") from exc
+    return _parse(data, "", target == PRIMARY, target)
+
+
+def one_event(db: Session, event_id: str, calendar_id: str = PRIMARY) -> Event | None:
+    """אירוע אחד לפי מזהה, כדי לדעת מה באמת שם לפני שמשנים.
+
+    ⚠️ **השרת אינו סומך על מה שהמסך מספר לו.** המזהה של הסדרה, ה-etag
+    והמשתתפים הקיימים נקראים מגוגל, אחרת בקשה מזויפת הייתה יכולה
+    להצהיר "זה מופע של סדרה" ולשנות פגישות שלא נראו.
+    """
+    name = ""
+    primary = calendar_id in ("", PRIMARY)
+    for cal in calendars(db, owned_only=False):
+        if cal.id == calendar_id:
+            name, primary = cal.name, cal.primary
+            break
+    raw = _request(
+        gauth.access_token(db),
+        f"{_path(calendar_id or PRIMARY)}/{quote(event_id, safe='')}",
+    )
+    return _parse(raw, name, primary, calendar_id or PRIMARY)

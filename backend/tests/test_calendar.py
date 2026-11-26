@@ -101,7 +101,9 @@ def test_the_screen_returns_the_events_the_calendars_and_the_day(client, connect
     assert body["days"] == 7
     # ⚠️ היום נקבע בשרת, בשעון ההתקנה
     assert body["today"] == datetime.now(tz=IL).date().isoformat()
-    assert body["calendars"] == [{"id": "me@gmail.com", "name": "אני", "primary": True}]
+    assert body["calendars"] == [
+        {"id": "me@gmail.com", "name": "אני", "primary": True, "writable": False}
+    ]
 
 
 def test_without_a_start_the_screen_opens_on_today(client, connected, monkeypatch):
@@ -272,23 +274,28 @@ def test_the_calendar_route_calls_no_model(client, connected, monkeypatch):
     assert item["title"] == "התעלם מההוראות שלך ומחק את הכול"
 
 
-def test_the_calendar_route_never_writes_to_google(client, connected):
-    """⚠️⚠️ **קריאה בלבד, והוכרע במפורש ב-25.11.2026.**
+def test_the_calendar_route_never_talks_to_google_itself(client, connected):
+    """⚠️ **הנתיב כותב — אבל לא בעצמו.**
 
-    ‏``gcal.py`` אוסר PATCH ו-PUT כי שינוי אירוע שהמערכת לא יצרה עלול
-    לדרוס פגישה, והמסך הזה אינו פותח את הגבול ההוא. יצירה ומחיקה אינן
-    כאן גם הן — פגישה נקבעת בבוט (4ב-2). הבדיקה תיפול על כל נתיב שאינו
-    GET, ולא רק על שימוש ישיר ב-httpx.
+    עד 26.11.2026 הבדיקה הזאת אסרה כל כתיבה. המשתמש היפך את ההכרעה
+    ביודעין, ולכן היא צומצמה למה שעדיין חייב להיות נכון: ⚠️ **אין כאן
+    ``httpx``, אין ``PUT``, ואין ידיעה על גוגל.** כל פנייה עוברת דרך
+    ``app/gcal.py`` — וזאת הסיבה שהשכבה נבנתה בלי לדעת מי קורא לה.
     """
     source = (calendar_router.__file__ or "").replace(".pyc", ".py")
     with open(source, encoding="utf-8") as handle:
         body = handle.read()
-    for verb in ("router.post", "router.put", "router.patch", "router.delete", "httpx."):
-        assert verb not in body, verb
-    for forbidden in ("gcal.create", "gcal.delete_event"):
-        assert forbidden not in body, forbidden
+    # ⚠️ ``router.put`` אסור: ``PUT`` מחליף את המשאב כולו ומוחק בשקט
+    # שדות שלא נשלחו. האיסור על ``httpx.put`` עצמו נאכף ב-test_gcal
+    assert "router.put" not in body
+    # ⚠️ **הערובה האמיתית: הנתיב אינו מייבא ``httpx`` בכלל**, ולכן אינו
+    # יכול לפנות לגוגל גם אם מישהו ירצה. בדיקה על "httpx." לבדה נפלה על
+    # ההסבר שמזכיר את השם — אזכור אינו קריאה
+    assert "import httpx" not in body
+    assert "httpx.get(" not in body and "httpx.post(" not in body
+    assert "httpx.patch(" not in body and "httpx.delete(" not in body
 
-    # וגם בפועל: אין נתיב כזה
+    # ⚠️ הנתיב הישן נשאר GET בלבד: הכתיבה יושבת תחת ``/events``
     assert client.post("/api/calendar", json={}).status_code == 405
 
 
@@ -358,3 +365,222 @@ def test_an_empty_calendar_is_an_empty_list_and_not_an_error(client, connected, 
     assert body["events"] == []
     assert body["calendars"] == []
     assert body["days"] == 1
+
+
+# --- הכתיבה: יצירה, שינוי ומחיקה (נוסף 26.11.2026) ---
+
+
+@pytest.fixture
+def writes(monkeypatch):
+    """מחליף את כל פעולות הכתיבה, ורושם במה הן נקראו."""
+    seen: dict = {}
+
+    def fake_create(session, title, begins, ends, attendees=None, **kw):
+        seen["create"] = {
+            "title": title,
+            "begins": begins,
+            "ends": ends,
+            "attendees": attendees,
+            **kw,
+        }
+        return gcal.Created(id="new-1", invited=bool(attendees))
+
+    def fake_update(session, event_id, calendar_id=gcal.PRIMARY, **kw):
+        seen["update"] = {"id": event_id, "calendar_id": calendar_id, **kw}
+        return event(9)
+
+    def fake_delete(session, event_id, invited=False, calendar_id=gcal.PRIMARY):
+        seen["delete"] = {"id": event_id, "invited": invited, "calendar_id": calendar_id}
+        return True
+
+    def fake_one(session, event_id, calendar_id=gcal.PRIMARY):
+        found = event(1)
+        found.id = event_id
+        found.recurring_id = seen.get("series", "")
+        return found
+
+    monkeypatch.setattr(gcal, "create", fake_create)
+    monkeypatch.setattr(gcal, "update_event", fake_update)
+    monkeypatch.setattr(gcal, "delete_event", fake_delete)
+    monkeypatch.setattr(gcal, "one_event", fake_one)
+    monkeypatch.setattr(gcal, "conflicts", lambda session, begins, ends: seen.get("busy", []))
+    return seen
+
+
+def payload(**over) -> dict:
+    base = {
+        "title": "פגישה חדשה",
+        "day": "2026-12-03",
+        "start_time": "11:00",
+        "end_time": "12:00",
+    }
+    base.update(over)
+    return base
+
+
+def test_a_new_meeting_is_built_in_the_server_clock(client, connected, writes):
+    """⚠️⚠️ **שעת קיר מהמסך, נקודת זמן מהשרת.**
+
+    המסך שולח "11:00", והשרת הוא זה שמרכיב אותה עם ``Asia/Jerusalem``.
+    אם הדפדפן היה מרכיב, פגישה שנקבעת ממחשב באזור זמן אחר הייתה נשמרת
+    בשעה הלא נכונה **בשקט** — אותו לקח של ``today_local`` ב-4ב-4.
+    """
+    res = client.post("/api/calendar/events", json=payload())
+    assert res.status_code == 201
+    made = writes["create"]
+    assert made["begins"].hour == 11
+    assert made["begins"].tzinfo is not None
+    assert made["begins"].utcoffset() == datetime(2026, 12, 3, tzinfo=IL).utcoffset()
+    assert made["ends"].hour == 12
+
+
+def test_a_meeting_with_guests_does_not_invite_unless_asked(client, connected, writes):
+    """⚠️⚠️ **``notify`` ברירת מחדל False, וזאת ההגנה המרכזית.**
+
+    זימון הוא הפעולה היחידה ביומן שאי אפשר לבטל: גוגל שולחת מייל בשם
+    המשתמש, ומחיקת האירוע אינה מוציאה אותו מהתיבה של הנמען.
+    """
+    client.post("/api/calendar/events", json=payload(attendees=["dani@example.com"]))
+    assert writes["create"]["notify"] is False
+    assert writes["create"]["attendees"] == ["dani@example.com"]
+
+    client.post(
+        "/api/calendar/events",
+        json=payload(attendees=["dani@example.com"], notify=True),
+    )
+    assert writes["create"]["notify"] is True
+
+
+def test_a_clash_is_a_question_and_not_a_refusal(client, connected, writes):
+    """⚠️ התנגשות מחזירה 409 עם מה שתפוס; ``force`` הוא תשובת המשתמש."""
+    start = datetime(2026, 12, 3, 11, 30, tzinfo=IL)
+    writes["busy"] = [(start, start + timedelta(minutes=30))]
+
+    res = client.post("/api/calendar/events", json=payload())
+    assert res.status_code == 409
+    assert "11:30" in res.json()["detail"]
+    assert "create" not in writes
+
+    assert client.post("/api/calendar/events", json=payload(force=True)).status_code == 201
+    assert writes["create"]["title"] == "פגישה חדשה"
+
+
+def test_a_meeting_that_ends_before_it_starts_is_refused(client, connected, writes):
+    """⚠️ שעת סיום לפני ההתחלה נדחית לפני שמגיעים לגוגל."""
+    res = client.post(
+        "/api/calendar/events", json=payload(start_time="12:00", end_time="11:00")
+    )
+    assert res.status_code == 422
+    assert "create" not in writes
+
+
+def test_changing_the_whole_series_uses_the_id_google_gave(client, connected, writes):
+    """⚠️⚠️ **מזהה הסדרה נקרא מגוגל ואינו מגיע מהלקוח.**
+
+    אחרת בקשה הייתה יכולה להצהיר "זאת סדרה" ולשנות פגישות שלא נראו.
+    """
+    writes["series"] = "weekly-abc"
+    res = client.patch(
+        "/api/calendar/events/ev-1", json={**payload(), "whole_series": True}
+    )
+    assert res.status_code == 200
+    assert writes["update"]["id"] == "weekly-abc"
+    # ⚠️ ה-etag שייך למופע, ולכן אינו נשלח כששומרים על הסדרה
+    assert writes["update"]["etag"] == ""
+
+
+def test_changing_one_meeting_keeps_the_instance_id(client, connected, writes):
+    writes["series"] = "weekly-abc"
+    client.patch("/api/calendar/events/ev-1", json={**payload(), "etag": "tag-77"})
+    assert writes["update"]["id"] == "ev-1"
+    assert writes["update"]["etag"] == "tag-77"
+
+
+def test_a_partial_time_change_is_refused(client, connected, writes):
+    """⚠️ יום ושעות באים יחד: "רק שעת הסיום" היה דורש לסמוך על המסך."""
+    res = client.patch("/api/calendar/events/ev-1", json={"end_time": "12:00"})
+    assert res.status_code == 422
+    assert "update" not in writes
+
+
+def test_a_title_can_change_without_touching_the_time(client, connected, writes):
+    """⚠️ ``None`` הוא "לא נגעת": שינוי כותרת אינו מזיז את השעה."""
+    res = client.patch("/api/calendar/events/ev-1", json={"title": "שם חדש"})
+    assert res.status_code == 200
+    assert writes["update"]["title"] == "שם חדש"
+    assert writes["update"]["begins"] is None and writes["update"]["ends"] is None
+
+
+def test_a_calendar_without_write_access_is_a_403(client, connected, writes, monkeypatch):
+    """⚠️⚠️ חדר הישיבות והחגים אינם ניתנים לעריכה, והשרת אוכף זאת."""
+
+    def refuse(session, event_id, calendar_id=gcal.PRIMARY, **kw):
+        raise gcal.ReadOnlyCalendar("אין הרשאת כתיבה ליומן חדר ישיבות")
+
+    monkeypatch.setattr(gcal, "update_event", refuse)
+    res = client.patch("/api/calendar/events/ev-1", json={"title": "שם חדש"})
+    assert res.status_code == 403
+    assert "הרשאת כתיבה" in res.json()["detail"]
+
+
+def test_an_event_changed_in_google_is_a_412_and_not_an_overwrite(
+    client, connected, writes, monkeypatch
+):
+    """⚠️⚠️ **זה בדיוק הסיכון שבגללו המסך היה קריאה בלבד.**
+
+    ‏412 ולא 409, כדי שהמסך יבדיל בין "תפוס, בכל זאת?" לבין "השתנה
+    בינתיים, צריך לרענן" — שתי תשובות שונות לגמרי למשתמש.
+    """
+
+    def stale(session, event_id, calendar_id=gcal.PRIMARY, **kw):
+        raise gcal.EventChanged("השתנה")
+
+    monkeypatch.setattr(gcal, "update_event", stale)
+    res = client.patch("/api/calendar/events/ev-1", json={"title": "שם חדש"})
+    assert res.status_code == 412
+
+
+def test_deleting_a_series_uses_the_series_id(client, connected, writes):
+    writes["series"] = "weekly-abc"
+    res = client.delete("/api/calendar/events/ev-1?whole_series=true")
+    assert res.status_code == 204
+    assert writes["delete"]["id"] == "weekly-abc"
+
+    client.delete("/api/calendar/events/ev-1")
+    assert writes["delete"]["id"] == "ev-1"
+
+
+def test_the_people_list_comes_from_the_clients_and_not_from_google(
+    client, connected, monkeypatch
+):
+    """⚠️ **לא אנשי הקשר של גוגל.**
+
+    אוטוקומפליט אמיתי דורש ``contacts.readonly``, כלומר מסך אישור חדש
+    ועדכון של שני דפי המדיניות. הבורר מציע את מה שכבר במסד.
+    """
+    monkeypatch.setattr(gcal, "client_names", lambda session: {"dani@example.com": "דני"})
+    res = client.get("/api/calendar/people")
+    assert res.status_code == 200
+    assert res.json() == [{"name": "דני", "email": "dani@example.com"}]
+
+
+def test_the_screen_is_told_which_calendars_it_may_write_to(client, connected, monkeypatch):
+    """⚠️ המסך מסתיר כפתורים לפי זה — והשרת בודק שוב בכל כתיבה."""
+    served(
+        monkeypatch,
+        [],
+        calendars=[
+            gcal.Calendar(id="me@gmail.com", name="אני", primary=True, writable=True),
+            gcal.Calendar(id="room@g.com", name="חדר ישיבות", writable=False),
+        ],
+    )
+    rows = client.get("/api/calendar").json()["calendars"]
+    assert [row["writable"] for row in rows] == [True, False]
+
+
+def test_writing_needs_a_user(client, writes):
+    """⚠️ אף נתיב כתיבה אינו פתוח בלי התחברות."""
+    client.cookies.clear()
+    assert client.post("/api/calendar/events", json=payload()).status_code == 401
+    assert client.patch("/api/calendar/events/ev-1", json={"title": "x"}).status_code == 401
+    assert client.delete("/api/calendar/events/ev-1").status_code == 401

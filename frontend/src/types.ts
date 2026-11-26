@@ -264,6 +264,8 @@ export interface CalendarRef {
   id: string;
   name: string;
   primary: boolean;
+  /** ⚠️ מותר לכתוב ליומן הזה. חדר הישיבות והחגים הם reader */
+  writable: boolean;
 }
 
 /**
@@ -286,6 +288,11 @@ export interface CalendarEvent {
   day: string | null;
   location: string;
   attendees: string[];
+  description: string;
+  /** ⚠️ מופע של פגישה חוזרת. כמעט כל הפגישות ביומן האמיתי כאלה */
+  recurring: boolean;
+  /** חתימת הגרסה, חוזרת לשרת בעדכון כדי לא לדרוס שינוי של מישהו אחר */
+  etag: string;
 }
 
 export interface CalendarData {
@@ -296,4 +303,29 @@ export interface CalendarData {
   today: string;
   calendars: CalendarRef[];
   events: CalendarEvent[];
+}
+
+/** לקוח עם כתובת מייל, לבורר המשתתפים. ⚠️ לא אנשי הקשר של גוגל */
+export interface CalendarPerson {
+  name: string;
+  email: string;
+}
+
+/**
+ * מה שטופס הפגישה מחזיק בזמן עריכה.
+ * ⚠️ `id` ריק פירושו פגישה חדשה, ולא עריכה של קיימת.
+ */
+export interface EventDraft {
+  id: string;
+  title: string;
+  day: string;
+  from: string;
+  to: string;
+  calendar_id: string;
+  location: string;
+  description: string;
+  attendees: string[];
+  /** ⚠️ מופע של סדרה: הטופס חייב לשאול "הפגישה הזאת או כל הסדרה" */
+  recurring: boolean;
+  etag: string;
 }
