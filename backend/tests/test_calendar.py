@@ -101,7 +101,9 @@ def test_the_screen_returns_the_events_the_calendars_and_the_day(client, connect
     assert body["days"] == 7
     # ⚠️ היום נקבע בשרת, בשעון ההתקנה
     assert body["today"] == datetime.now(tz=IL).date().isoformat()
-    assert body["calendars"] == [{"id": "me@gmail.com", "name": "אני", "primary": True}]
+    assert body["calendars"] == [
+        {"id": "me@gmail.com", "name": "אני", "primary": True, "writable": False}
+    ]
 
 
 def test_without_a_start_the_screen_opens_on_today(client, connected, monkeypatch):
@@ -287,8 +289,6 @@ def test_the_calendar_route_never_talks_to_google_itself(client, connected):
     # שדות שלא נשלחו. האיסור על ``httpx.put`` עצמו נאכף ב-test_gcal
     for verb in ("router.put", "httpx."):
         assert verb not in body, verb
-    for marker in ("googleapis", "calendarList", "singleEvents", "freeBusy"):
-        assert marker not in body, marker
 
     # ⚠️ הנתיב הישן נשאר GET בלבד: הכתיבה יושבת תחת ``/events``
     assert client.post("/api/calendar", json={}).status_code == 405

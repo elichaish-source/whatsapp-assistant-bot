@@ -356,7 +356,8 @@ def test_the_calendar_layer_never_replaces_a_whole_event(monkeypatch):
     source = (gcal.__file__ or "").replace(".pyc", ".py")
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    assert "httpx.put" not in text
+    # ⚠️ הקריאה עצמה, ולא האזכור: ההסבר למעלה מזכיר את השם בכוונה
+    assert "httpx.put(" not in text
     # ⚠️ וגם לא דרך הדלת האחורית של ``request``
     assert 'method="PUT"' not in text and "'PUT'" not in text
 
