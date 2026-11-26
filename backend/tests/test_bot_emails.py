@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from app import gauth, gmail
-from app.bot import actions
+from app.bot import actions, pipeline
 from app.bot.intent import Intent
 from app.models import BotMessage, Client, Task
 
@@ -671,7 +671,7 @@ def test_the_numbering_is_written_to_the_message_log(db, connected, monkeypatch,
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1), mail(2)])
     no_filter(monkeypatch)
     monkeypatch.setattr(
-        bot_router,
+        pipeline,
         "extract",
         lambda *a, **k: _result(Intent(action="list_emails")),
     )
@@ -710,7 +710,7 @@ def test_a_long_list_goes_out_as_several_whatsapp_messages(db, connected, monkey
     ]
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: many)
     monkeypatch.setattr(
-        bot_router,
+        pipeline,
         "extract",
         lambda *a, **k: _result(Intent(action="list_emails", email_show_all=True)),
     )
@@ -735,7 +735,7 @@ def test_nothing_about_the_mail_content_is_stored(db, connected, monkeypatch):
     monkeypatch.setattr(gmail, "list_inbox", lambda *a, **k: [mail(1)])
     no_filter(monkeypatch)
     monkeypatch.setattr(
-        bot_router, "extract", lambda *a, **k: _result(Intent(action="list_emails"))
+        pipeline, "extract", lambda *a, **k: _result(Intent(action="list_emails"))
     )
     row = BotMessage(wa_message_id="wa-log-3", body="מה נכנס היום")
     db.add(row)

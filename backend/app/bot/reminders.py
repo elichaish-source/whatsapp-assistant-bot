@@ -19,7 +19,7 @@ from ..auth import aware, now
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import EmailAlert, Task
-from . import briefs
+from . import briefs, outbox
 from .actions import describe, now_local, to_local
 
 log = logging.getLogger(__name__)
@@ -93,7 +93,11 @@ def send_due_reminders(db: Session, moment: datetime | None = None) -> int:
         if not stale and phone:
             text = reminder_text(db, task, moment)
             try:
-                waha.send_text(phone, text)
+                # ⚠️ המפתח כולל את הרגע, כי הנדנוד שולח על אותה משימה
+                # שוב מחר — ושתי התזכורות הן שתי הודעות ביומן
+                outbox.send(
+                    phone, text, outbox.REMINDER, f"task-{task.id}-{moment:%Y%m%d%H%M}"
+                )
                 sent += 1
                 # מתי יצאה תזכורת, כדי שאפשר יהיה ללמוד מתי היא עובדת
                 memory.observe(
@@ -416,7 +420,7 @@ def send_mail_digest(db: Session, moment: datetime | None = None) -> int:
     text = gmail.inbox_counts(db)
     try:
         body = digest_text(text, waiting, silent)
-        waha.send_text(phone, body)
+        outbox.send(phone, body, outbox.MAIL_DIGEST, f"{moment.date()}")
         ring(body)
         sent += 1
     except waha.WahaError:
@@ -434,7 +438,7 @@ def send_mail_digest(db: Session, moment: datetime | None = None) -> int:
                 continue
             try:
                 body = alert_text(item, kind)
-                waha.send_text(phone, body)
+                outbox.send(phone, body, outbox.MAIL_ALERT, f"{kind}-{item.thread_id}")
                 ring(body)
                 sent += 1
             except waha.WahaError:

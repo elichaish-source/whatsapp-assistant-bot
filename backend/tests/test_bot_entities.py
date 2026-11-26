@@ -16,7 +16,7 @@ from typing import get_args
 import pytest
 from sqlalchemy import select
 
-from app.bot import actions, entities
+from app.bot import actions, entities, pipeline
 from app.bot.intent import INTENT_SCHEMA, Action, Intent, IntentResult
 from app.models import BotMessage, Client, ClientFamily, Domain, Project, Task
 from app.routers import bot as bot_router
@@ -68,7 +68,7 @@ def say(db, sent, monkeypatch):
         db.add(BotMessage(wa_message_id=message_id, body=body))
         db.commit()
         monkeypatch.setattr(
-            bot_router, "extract", lambda *args, **kwargs: IntentResult(intent=intent)
+            pipeline, "extract", lambda *args, **kwargs: IntentResult(intent=intent)
         )
         bot_router.handle_message(message_id, body)
         db.expire_all()

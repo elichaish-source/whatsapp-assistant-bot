@@ -7,7 +7,6 @@
 
 import hashlib
 import hmac
-import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
@@ -15,9 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import auth, memory, waha
-from ..bot import actions
-from ..bot.intent import IntentError, extract
+from .. import auth, waha
+from ..bot import pipeline
+from ..bot.actions import WHATSAPP
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import BotMessage
@@ -75,69 +74,20 @@ def is_owner_self_chat(payload: dict) -> bool:
 
 
 def handle_message(wa_message_id: str, body: str) -> None:
-    """מפענח, מבצע, עונה — ורושם ביומן. רץ ברקע, אחרי שהוחזר 200 ל-WAHA."""
+    """מפענח, מבצע, עונה — ורושם ביומן. רץ ברקע, אחרי שהוחזר 200 ל-WAHA.
+
+    ⚠️ הפענוח והביצוע עברו ל-``bot/pipeline.py``, כדי שהמסך בדשבורד
+    ירוץ באותו קוד בדיוק. **מה שנשאר כאן הוא הערוץ**: הקליטה מ-WAHA
+    והשליחה חזרה בוואטסאפ.
+    """
     db: Session = SessionLocal()
     try:
         row = db.scalars(
             select(BotMessage).where(BotMessage.wa_message_id == wa_message_id)
         ).one()
-        settings = get_settings()
-        # כלל הברזל: בלי זיכרון הבוט עובד בדיוק כמו קודם
-        memory_block = memory.build_block(db)
-        try:
-            result = extract(
-                body,
-                actions.build_context(db),
-                actions.now_local(),
-                actions.build_history(db, row.id),
-                memory_block,
-            )
-        except IntentError as exc:
-            log.warning("פענוח ההודעה נכשל: %s", exc)
-            row.error = str(exc)
-            row.reply = "לא הצלחתי לפענח את ההודעה. אפשר לנסות שוב בעוד רגע."
-            db.commit()
-            _reply(settings.owner_phone, row.reply)
-            return
-
-        row.intent = result.intent.action
-        # הבלוק שהוזרק נשמר כמו שהוא, כדי שתמיד נדע על סמך מה הבוט החליט
-        row.memory_used = memory_block or None
-        row.input_tokens = result.input_tokens
-        row.output_tokens = result.output_tokens
-        row.cached_tokens = result.cached_tokens
-        db.commit()
-
-        outcome = actions.execute(db, result.intent, row.id)
-        row.reply = outcome.reply
-        row.task_id = outcome.task_id
-        row.fact_id = outcome.fact_id
-        row.recurrence_id = outcome.recurrence_id
-        row.query_sql = outcome.query_sql
-        row.undo_json = json.dumps(outcome.undo, ensure_ascii=False) if outcome.undo else None
-        row.pending_json = (
-            json.dumps(outcome.pending, ensure_ascii=False) if outcome.pending else None
-        )
-        if outcome.listed_task_ids:
-            row.listed_task_ids = ",".join(str(item) for item in outcome.listed_task_ids)
-        elif outcome.clear_list:
-            # ‏"" ולא None: השורה הזאת היא עכשיו המספור האחרון, והוא ריק.
-            # ככה "סיימתי 2" לא יחזור אחורה לרשימה של לפני השאילתה
-            row.listed_task_ids = ""
-        else:
-            row.listed_task_ids = None
-        # ‏None ולא "": רשימת המיילים האחרונה נשארת תקפה גם אחרי הודעות
-        # שאינן על מיילים, בדיוק כמו שרשימת המשימות נשארת תקפה
-        row.listed_email_ids = (
-            ",".join(outcome.listed_email_ids) if outcome.listed_email_ids else None
-        )
-        if outcome.query_error:
-            row.error = outcome.query_error
-        db.commit()
-        # מייל ארוך יוצא בכמה הודעות. בכל שאר המקרים parts ריק, וזו
-        # בדיוק אותה שליחה אחת שהייתה כאן קודם
-        for part in outcome.parts or [outcome.reply]:
-            _reply(settings.owner_phone, part)
+        phone = get_settings().owner_phone
+        for part in pipeline.run(db, row):
+            _reply(phone, part)
     except Exception:  # noqa: BLE001 - רץ ברקע, אין למי לזרוק
         log.exception("טיפול בהודעת וואטסאפ נכשל")
     finally:
@@ -181,7 +131,14 @@ async def webhook(
     # מקבל 200, ואותה הודעה מגיעה גם ב-message וגם ב-message.any
     db = SessionLocal()
     try:
-        db.add(BotMessage(wa_message_id=wa_message_id, body=body[:MAX_BODY_CHARS]))
+        db.add(
+            BotMessage(
+                wa_message_id=wa_message_id,
+                body=body[:MAX_BODY_CHARS],
+                # מפורש ולא ברירת מחדל: זה מה שהמספור והאישור ייפתרו מולו
+                channel=WHATSAPP,
+            )
+        )
         db.commit()
     except IntegrityError:
         db.rollback()

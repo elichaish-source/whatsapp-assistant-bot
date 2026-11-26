@@ -13,6 +13,7 @@ import Projects from "./pages/Projects";
 import Recurring from "./pages/Recurring";
 import Settings from "./pages/Settings";
 import Tasks from "./pages/Tasks";
+import WhatsApp from "./pages/WhatsApp";
 
 const NAV = [
   { to: "/tasks", label: "משימות" },
@@ -23,7 +24,7 @@ const NAV = [
   { to: "/finance", label: "כספים", soon: true },
   { to: "/mail", label: "מיילים" },
   { to: "/calendar", label: "יומן" },
-  { to: "/whatsapp", label: "וואטסאפ", soon: true },
+  { to: "/whatsapp", label: "וואטסאפ" },
   { to: "/vault", label: "כספת", soon: true },
   { to: "/settings", label: "הגדרות" },
 ];
@@ -80,6 +81,7 @@ export default function App() {
             <Route path="/memory" element={<Memory />} />
             <Route path="/mail" element={<Mail />} />
             <Route path="/calendar" element={<Calendar />} />
+            <Route path="/whatsapp" element={<WhatsApp />} />
             <Route path="/settings" element={<Settings />} />
             {NAV.filter((n) => n.soon).map((n) => (
               <Route key={n.to} path={n.to} element={<ComingSoon title={n.label} />} />

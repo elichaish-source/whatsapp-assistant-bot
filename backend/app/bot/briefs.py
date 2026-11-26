@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 from .. import gcal, memory, waha
 from ..config import get_settings
 from ..models import Client, EventBrief, MemoryFact, Task
+from . import outbox
 from .entities import name_words
 
 log = logging.getLogger(__name__)
@@ -229,6 +230,22 @@ def compose(
     return "\n".join(lines)
 
 
+def journal_text(text: str) -> str:
+    """התדריך כפי שהוא נרשם ביומן ההודעות — **בלי שורת הכותרת**.
+
+    ⚠️⚠️ **זה אינו קיצור אלא גבול פרטיות.** השורה הראשונה של התדריך היא
+    השעה וכותרת הפגישה, ו-``frontend/public/privacy.html`` מבטיח
+    במפורש שהתדריך אינו שומר את הפגישה: "מהיומן הוא לוקח רק את השעה,
+    את הכותרת ואת מי שהוזמן — ברגע השליחה, בלי לשמור אותם". כל שאר
+    השורות נבנו מהמשימות, מהעובדות ומכרטיס הלקוח שכבר במסד.
+
+    ⚠️ יש בדיקה ששותלת כותרת אירוע ועוברת על כל העמודות הטקסטואליות
+    בכל הטבלאות — היא זאת שתיפול אם מישהו ירשום כאן את הטקסט המלא.
+    """
+    rest = text.split("\n")[1:]
+    return "\n".join([PREFIX, *rest])
+
+
 # --- השליחה ---
 
 
@@ -303,7 +320,10 @@ def send_briefs(
         if not text:
             continue
         try:
-            waha.send_text(phone, text)
+            # ⚠️ מה שנשלח מלא, ומה שנרשם בלי שורת הכותרת
+            outbox.send(
+                phone, text, outbox.BRIEF, event.id, journal=journal_text(text)
+            )
         except waha.WahaError:
             log.exception("שליחת תדריך לפגישה נכשלה")
             continue

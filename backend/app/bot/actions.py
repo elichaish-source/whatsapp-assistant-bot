@@ -48,6 +48,13 @@ HISTORY_WINDOW = timedelta(minutes=15)
 HISTORY_EXCHANGES = 6
 HISTORY_LINE_CHARS = 200
 
+# שני הערוצים שמדברים עם אותו מוח. ⚠️⚠️ **כל מקום שמחפש את "ההודעה
+# הקודמת" מסנן לפי הערוץ הזה** — מספור ("סיימתי 2"), אישור ("כן")
+# וביטול ("בטל"). בלי זה הודעה שנכתבה במסך הופכת ל"הקודמת" מול וואטסאפ,
+# והמשימה שנסגרת היא הלא נכונה, בשקט.
+WHATSAPP = "whatsapp"
+SCREEN = "screen"
+
 
 def local_tz() -> ZoneInfo:
     return ZoneInfo(get_settings().timezone)
@@ -117,16 +124,23 @@ def _one_line(text: str) -> str:
     return " ".join((text or "").split())[:HISTORY_LINE_CHARS]
 
 
-def build_history(db: Session, before_id: int) -> str:
+def build_history(db: Session, before_id: int, channel: str = WHATSAPP) -> str:
     """חילופי הדברים האחרונים בצ'אט, מהישן לחדש. מחרוזת ריקה כשאין.
 
     בלי זה כל הודעה היא שיחה חדשה, ושאלת הבהרה של הבוט לא יכולה לקבל
     תשובה: הוא שואל "לאיזה לקוח?" ואז לא זוכר על מה שאל.
+
+    ⚠️ **רק השיחה של אותו ערוץ.** מה שנכתב במסך אינו ההקשר של מה שנכתב
+    בוואטסאפ, ו"בעצם ביום חמישי" שנאמר בערוץ אחד אינו המשך של שאלה
+    שנשאלה באחר. ⚠️ **והודעות שהמערכת יזמה אינן שיחה** — תזכורת אינה
+    דבר שהמשתמש אמר, ובהיסטוריה היא הייתה נראית כך.
     """
     rows = db.scalars(
         select(BotMessage)
         .where(
             BotMessage.id < before_id,
+            BotMessage.channel == channel,
+            BotMessage.initiated.is_(False),
             BotMessage.reply.is_not(None),
             BotMessage.created_at >= now() - HISTORY_WINDOW,
         )
@@ -355,11 +369,15 @@ def _add_recurring(db: Session, intent: Intent) -> Outcome:
     return Outcome(reply + '\nלביטול כתוב "בטל".', recurrence_id=rec.id)
 
 
-def _resolve_by_number(db: Session, number: int) -> Task | None:
-    """מתרגם מספר ששהמשתמש ציטט לרשימה האחרונה שהבוט שלח."""
+def _resolve_by_number(db: Session, number: int, channel: str = WHATSAPP) -> Task | None:
+    """מתרגם מספר ששהמשתמש ציטט לרשימה האחרונה שהבוט שלח **באותו ערוץ**.
+
+    ⚠️⚠️ הסינון לפי ערוץ הוא כל העניין: רשימה שהוצגה במסך אינה הרשימה
+    שמולה "סיימתי 2" בוואטסאפ נפתר.
+    """
     row = db.scalars(
         select(BotMessage)
-        .where(BotMessage.listed_task_ids.is_not(None))
+        .where(BotMessage.listed_task_ids.is_not(None), BotMessage.channel == channel)
         .order_by(BotMessage.id.desc())
         .limit(1)
     ).first()
@@ -371,11 +389,11 @@ def _resolve_by_number(db: Session, number: int) -> Task | None:
     return db.get(Task, ids[number - 1])
 
 
-def _complete_task(db: Session, intent: Intent) -> Outcome:
+def _complete_task(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     task: Task | None = None
 
     if intent.task_number:
-        task = _resolve_by_number(db, intent.task_number)
+        task = _resolve_by_number(db, intent.task_number, channel)
         if task is None:
             return Outcome("לא מצאתי משימה במספר הזה. אפשר לבקש \"רשימה\" ולנסות שוב.")
 
@@ -468,14 +486,14 @@ def _find_open(db: Session, text: str) -> list[Task]:
     return []
 
 
-def _locate(db: Session, intent: Intent) -> Task | Outcome:
+def _locate(db: Session, intent: Intent, channel: str = WHATSAPP) -> Task | Outcome:
     """המשימה הפתוחה שהמשתמש התכוון אליה, או תשובה שמסבירה למה אין אחת.
 
     ‏⚠️ לא בוחר לבד מבין כמה התאמות. שינוי שקט במשימה הלא נכונה הוא בדיוק
     הסוג שלא שמים לב אליו, ולכן כמה התאמות מוצגות ונשאלת שאלה.
     """
     if intent.task_number:
-        task = _resolve_by_number(db, intent.task_number)
+        task = _resolve_by_number(db, intent.task_number, channel)
         if task is None:
             return Outcome('לא מצאתי משימה במספר הזה. אפשר לבקש "רשימה" ולנסות שוב.')
         if task.status != "open":
@@ -560,7 +578,7 @@ def _restore(task: Task, data: dict) -> None:
         setattr(task, field, value)
 
 
-def _update_task(db: Session, intent: Intent) -> Outcome:
+def _update_task(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """משנה משימה פתוחה שהמשתמש ציין: "תדחה את הביטוח לשבוע הבא".
 
     בניגוד ל-update_last, חל על כל משימה פתוחה — גם כזאת שנוצרה בדשבורד,
@@ -570,7 +588,7 @@ def _update_task(db: Session, intent: Intent) -> Outcome:
     להשאיר משימה במצב שהדשבורד עצמו לא היה מרשה. כמו ב-update_last, אי
     אפשר לנקות שדה: null פירושו "לא הוזכר".
     """
-    found = _locate(db, intent)
+    found = _locate(db, intent, channel)
     if isinstance(found, Outcome):
         return found
     task = found
@@ -658,12 +676,12 @@ def _update_task(db: Session, intent: Intent) -> Outcome:
 # --- מחיקה, ואישור שנאכף כאן ---
 
 
-def _delete_task(db: Session, intent: Intent) -> Outcome:
+def _delete_task(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """לא מוחק. שואל, ורושם מה מחכה לתשובה.
 
     המחיקה עצמה קורית ב-_confirm, ורק אם ההודעה הבאה של המשתמש היא אישור.
     """
-    found = _locate(db, intent)
+    found = _locate(db, intent, channel)
     if isinstance(found, Outcome):
         return found
     task = found
@@ -676,14 +694,25 @@ def _delete_task(db: Session, intent: Intent) -> Outcome:
     )
 
 
-def _pending(db: Session, before_id: int | None) -> tuple[dict | None, str]:
+def _pending(
+    db: Session, before_id: int | None, channel: str = WHATSAPP
+) -> tuple[dict | None, str]:
     """הפעולה שמחכה לאישור, או הסבר למה אין כזאת.
 
     ‏⚠️ רק ההודעה שמיד לפני הנוכחית נחשבת. כל הודעה אחרת באמצע מבטלת את
     ההמתנה, כך ש"כן" שנאמר שעה אחר כך, על משהו אחר, לא מוחק כלום. המודל
     רק מזהה שהמשתמש אישר; מה שאושר נקרא מכאן ולא ממנו.
+
+    ‏⚠️⚠️ **"מיד לפני" הוא בתוך אותו ערוץ, ובלי הודעות שהמערכת יזמה.**
+    שאלה שנשאלה בוואטסאפ ו"כן" שנכתב במסך אינם אותה שיחה; ותזכורת
+    שנחתה בין השאלה לתשובה הייתה הופכת את "כן" ל"אין מה לאשר".
     """
-    stmt = select(BotMessage).order_by(BotMessage.id.desc()).limit(1)
+    stmt = (
+        select(BotMessage)
+        .where(BotMessage.channel == channel, BotMessage.initiated.is_(False))
+        .order_by(BotMessage.id.desc())
+        .limit(1)
+    )
     if before_id is not None:
         stmt = stmt.where(BotMessage.id < before_id)
     row = db.scalars(stmt).first()
@@ -698,11 +727,55 @@ def _pending(db: Session, before_id: int | None) -> tuple[dict | None, str]:
     return pending, ""
 
 
-def _confirm(db: Session, before_id: int | None) -> Outcome:
-    pending, reason = _pending(db, before_id)
+def _confirm(db: Session, before_id: int | None, channel: str = WHATSAPP) -> Outcome:
+    pending, reason = _pending(db, before_id, channel)
     if pending is None:
         return Outcome(reason)
+    return apply_pending(db, pending)
 
+
+def describe_pending(db: Session, pending: dict) -> tuple[str, bool]:
+    """תיאור קצר של פעולה שמחכה לאישור, והאם עוד אפשר לבצע אותה.
+
+    משמש את מסך הוואטסאפ בלשונית "פעולות שלא אישרת". ⚠️ התיאור נבנה
+    **מהנתונים** ולא מהטקסט שהבוט כתב, כדי שהוא יהיה נכון גם אם
+    המשימה שונתה בינתיים — ומשימה שכבר אינה קיימת יורדת מהרשימה.
+    """
+    kind = pending.get("kind") or ""
+    if kind == "delete_task":
+        task = db.get(Task, pending.get("task_id"))
+        if task is None:
+            return "מחיקת משימה שכבר לא קיימת", False
+        return f"למחוק את המשימה: {task.title}", True
+    data = pending.get("data") or {}
+    name = str(data.get("name") or data.get("title") or "").strip()
+    if kind == "add_client":
+        return f"ליצור לקוח: {name}", True
+    if kind == "add_project":
+        return f"ליצור פרויקט: {name}", True
+    if kind == "add_domain":
+        return f"ליצור תחום: {name}", True
+    if kind == "add_task_type":
+        return f"ליצור סוג משימה: {name}", True
+    if kind == "add_event":
+        guest = str(data.get("guest") or "").strip()
+        # ⚠️ **זאת הפעולה היחידה כאן שאינה הפיכה**: גוגל שולחת את
+        # ההזמנה בשם המשתמש, ומחיקת האירוע אינה מוציאה אותה מהתיבה שלו
+        return (
+            f"לקבוע פגישה: {name}" + (f", ולזמן את {guest}" if guest else ""),
+            True,
+        )
+    return "פעולה שאינה מוכרת יותר", False
+
+
+def apply_pending(db: Session, pending: dict) -> Outcome:
+    """מבצע פעולה שהמשתמש אישר. ⚠️ **מה שמבוצע נקרא מכאן ולא מהמודל.**
+
+    ⚠️ נקרא גם ממסך הוואטסאפ, בכפתור "בצע עכשיו" של פעולה שלא אושרה
+    בזמן. שם האישור מגיע מלחיצה מפורשת על השורה הנכונה, ולכן חלון
+    רבע השעה אינו חל עליו — ⚠️ **אבל התיאור שמוצג נבנה מהנתונים
+    מחדש**, כך שמה שנלחץ הוא מה שקורה.
+    """
     if pending.get("kind") == "delete_task":
         task = db.get(Task, pending.get("task_id"))
         if not task:
@@ -731,8 +804,8 @@ def _confirm(db: Session, before_id: int | None) -> Outcome:
     return Outcome("אין פעולה שמחכה לאישור.")
 
 
-def _decline(db: Session, before_id: int | None) -> Outcome:
-    pending, _ = _pending(db, before_id)
+def _decline(db: Session, before_id: int | None, channel: str = WHATSAPP) -> Outcome:
+    pending, _ = _pending(db, before_id, channel)
     if pending is None:
         return Outcome("בסדר.")
     if pending.get("kind") in ("add_client", "add_project", "add_domain", "add_task_type"):
@@ -810,13 +883,18 @@ def _query_data(db: Session, intent: Intent) -> Outcome:
     )
 
 
-def _last_bot_task_row(db: Session) -> BotMessage | None:
-    """ההודעה האחרונה שבעקבותיה הבוט יצר או עדכן משימה."""
+def _last_bot_task_row(db: Session, channel: str = WHATSAPP) -> BotMessage | None:
+    """ההודעה האחרונה שבעקבותיה הבוט יצר או עדכן משימה, **באותו ערוץ**.
+
+    ⚠️ "בעצם ביום חמישי" מתייחס למשימה שנוצרה בשיחה שהמשתמש רואה מולו,
+    ולא לאחת שנוצרה בערוץ השני.
+    """
     return db.scalars(
         select(BotMessage)
         .where(
             BotMessage.intent.in_(("add_task", "update_last")),
             BotMessage.task_id.is_not(None),
+            BotMessage.channel == channel,
         )
         .order_by(BotMessage.id.desc())
         .limit(1)
@@ -849,16 +927,20 @@ _UNDOABLE = (
 )
 
 
-def _last_bot_action_row(db: Session) -> BotMessage | None:
+def _last_bot_action_row(db: Session, channel: str = WHATSAPP) -> BotMessage | None:
     """ההודעה האחרונה שבעקבותיה הבוט שינה משהו — משימה, עובדה או התחייבות.
 
     דורשת שמשהו אכן נשמר, כי הודעה שנכשלה ("לא הבנתי מה המשימה") לא אמורה
     לחסום את הביטול של מה שנשמר לפניה.
+
+    ⚠️⚠️ **באותו ערוץ בלבד.** "בטל" פירושו "את מה שעשית עכשיו מולי";
+    ביטול שקט של משהו שנעשה בערוץ השני הוא בדיוק אותו כשל של המספור.
     """
     return db.scalars(
         select(BotMessage)
         .where(
             BotMessage.intent.in_(_UNDOABLE),
+            BotMessage.channel == channel,
             or_(
                 BotMessage.task_id.is_not(None),
                 BotMessage.fact_id.is_not(None),
@@ -871,12 +953,12 @@ def _last_bot_action_row(db: Session) -> BotMessage | None:
     ).first()
 
 
-def _cancel_last(db: Session) -> Outcome:
+def _cancel_last(db: Session, channel: str = WHATSAPP) -> Outcome:
     """מבטל את הדבר האחרון שהבוט עשה: משימה, עובדה או התחייבות חוזרת.
 
     לא נוגע במשימות מהדשבורד — מה שלא נוצר מהבוט לא נמחק ממנו.
     """
-    row = _last_bot_action_row(db)
+    row = _last_bot_action_row(db, channel)
     if not row:
         return Outcome("אין מה לבטל.")
     if row.created_at and now() - aware(row.created_at) > CANCEL_WINDOW:
@@ -999,13 +1081,13 @@ _LOOKUP_FIELDS = {
 }
 
 
-def _update_last(db: Session, intent: Intent) -> Outcome:
+def _update_last(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """מתקן את המשימה האחרונה: "בעצם ביום חמישי", "זה דחוף", "תשייך לדני".
 
     רק שדות שהמודל מילא משתנים. אי אפשר לנקות שדה בדרך הזאת, כי null
     פירושו "לא הוזכר" ולא "למחוק" — ניקוי נעשה בדשבורד.
     """
-    row = _last_bot_task_row(db)
+    row = _last_bot_task_row(db, channel)
     if not row or not row.task_id:
         return Outcome("אין משימה אחרונה לעדכן.")
     if row.created_at and now() - aware(row.created_at) > CANCEL_WINDOW:
@@ -1061,19 +1143,25 @@ def _update_last(db: Session, intent: Intent) -> Outcome:
     return Outcome(f"עודכן: {task.title}" + (f"\n{detail}" if detail else ""), task_id=task.id)
 
 
-def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcome:
+def execute(
+    db: Session, intent: Intent, before_id: int | None = None, channel: str = WHATSAPP
+) -> Outcome:
     """מבצע את הכוונה. ‏before_id הוא מזהה ההודעה הנוכחית ביומן.
 
     הוא נחוץ רק לאישור ולסירוב, שצריכים לדעת מה נשאל בהודעה שמיד לפני.
+
+    ⚠️ ``channel`` הוא הערוץ שבו ההודעה נכתבה, והוא מגיע עד לכל מקום
+    שמסתכל אחורה: מספור, אישור, סירוב וביטול. **אותה קבוצת פעולות
+    לשני הערוצים** — זה הגבול שנקבע באפיון, ואין כאן פעולה "של המסך".
     """
     if intent.action == "update_task":
-        return _update_task(db, intent)
+        return _update_task(db, intent, channel)
     if intent.action == "delete_task":
-        return _delete_task(db, intent)
+        return _delete_task(db, intent, channel)
     if intent.action == "confirm":
-        return _confirm(db, before_id)
+        return _confirm(db, before_id, channel)
     if intent.action == "decline":
-        return _decline(db, before_id)
+        return _decline(db, before_id, channel)
     if intent.action in _LIST_ACTIONS:
         from . import lists
 
@@ -1086,7 +1174,9 @@ def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcom
     if intent.action in _EMAIL_ACTIONS:
         from . import emails
 
-        return getattr(emails, intent.action)(db, intent)
+        # ⚠️ הערוץ עובר גם לכאן: "תראה לי את 2" נפתר מול רשימת המיילים
+        # האחרונה **של אותו ערוץ**, בדיוק כמו המשימות
+        return getattr(emails, intent.action)(db, intent, channel)
     if intent.action in _EVENT_ACTIONS:
         from . import events
 
@@ -1096,17 +1186,17 @@ def execute(db: Session, intent: Intent, before_id: int | None = None) -> Outcom
     if intent.action == "add_recurring":
         return _add_recurring(db, intent)
     if intent.action == "complete_task":
-        return _complete_task(db, intent)
+        return _complete_task(db, intent, channel)
     if intent.action == "list_tasks":
         return _list_tasks(db, intent)
     if intent.action == "query_data":
         return _query_data(db, intent)
     if intent.action == "cancel_last":
-        return _cancel_last(db)
+        return _cancel_last(db, channel)
     if intent.action == "remember":
         return _remember(db, intent)
     if intent.action == "update_last":
-        return _update_last(db, intent)
+        return _update_last(db, intent, channel)
     if intent.action == "clarify":
         return Outcome(intent.question or "לא הבנתי. אפשר לנסח שוב?")
     return Outcome('לא הבנתי. אפשר לכתוב למשל "תזכיר לי מחר ב-10 להתקשר לדני" או "רשימה".')

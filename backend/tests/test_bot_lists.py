@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import select, text
 
 from app import recurring
-from app.bot import actions, lists
+from app.bot import actions, lists, pipeline
 from app.bot.intent import INTENT_SCHEMA, Intent, IntentResult
 from app.db import engine
 from app.models import BotMessage, Domain, Recurrence, Task, TaskType
@@ -52,7 +52,7 @@ def say(db, sent, monkeypatch):
         db.add(BotMessage(wa_message_id=message_id, body=body))
         db.commit()
         monkeypatch.setattr(
-            bot_router, "extract", lambda *args, **kwargs: IntentResult(intent=intent)
+            pipeline, "extract", lambda *args, **kwargs: IntentResult(intent=intent)
         )
         bot_router.handle_message(message_id, body)
         db.expire_all()
