@@ -287,8 +287,13 @@ def test_the_calendar_route_never_talks_to_google_itself(client, connected):
         body = handle.read()
     # ⚠️ ``router.put`` אסור: ``PUT`` מחליף את המשאב כולו ומוחק בשקט
     # שדות שלא נשלחו. האיסור על ``httpx.put`` עצמו נאכף ב-test_gcal
-    for verb in ("router.put", "httpx."):
-        assert verb not in body, verb
+    assert "router.put" not in body
+    # ⚠️ **הערובה האמיתית: הנתיב אינו מייבא ``httpx`` בכלל**, ולכן אינו
+    # יכול לפנות לגוגל גם אם מישהו ירצה. בדיקה על "httpx." לבדה נפלה על
+    # ההסבר שמזכיר את השם — אזכור אינו קריאה
+    assert "import httpx" not in body
+    assert "httpx.get(" not in body and "httpx.post(" not in body
+    assert "httpx.patch(" not in body and "httpx.delete(" not in body
 
     # ⚠️ הנתיב הישן נשאר GET בלבד: הכתיבה יושבת תחת ``/events``
     assert client.post("/api/calendar", json={}).status_code == 405
