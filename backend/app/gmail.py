@@ -652,7 +652,19 @@ def _walk(
     filename = str(part.get("filename") or "")
     body = part.get("body") or {}
     head = {str(h.get("name", "")).lower(): str(h.get("value", "")) for h in part.get("headers") or []}
-    inline = "inline" in head.get("content-disposition", "").lower() or bool(head.get("content-id"))
+    # ⚠️⚠️ **ה-``Content-Disposition`` מכריע, ו-``Content-ID`` הוא רמז
+    # רק כשאין אחד.** הכלל הראשון שנכתב כאן סינן כל חלק שיש לו
+    # ``Content-ID``, והוא היה נכון על ארבעה מיילים אמיתיים — **ונשבר
+    # על החמישי**: מייל מועבר עם כרטסת שלח ``Report.pdf`` עם
+    # ``attachment`` **וגם** ``Content-ID``, והקובץ נעלם מהמסך. זה היה
+    # בדיוק המקרה שהמשתמש התלונן עליו.
+    disposition = head.get("content-disposition", "").lower()
+    if "attachment" in disposition:
+        inline = False
+    elif "inline" in disposition:
+        inline = True
+    else:
+        inline = bool(head.get("content-id"))
 
     if filename and not inline:
         names.append(
