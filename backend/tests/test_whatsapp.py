@@ -398,8 +398,9 @@ def test_confirming_late_executes_and_records_it(client, db):
     assert res.status_code == 201
     assert "נמחק" in res.json()["reply"]
     assert res.json()["channel"] == "screen"
-    # ⚠️ המחיקה קרתה בעסקה של הנתיב; בלי זה השורה חוזרת מהמטמון של הסשן
-    db.expire_all()
+    # ⚠️ המחיקה קרתה בעסקה של הנתיב; בלי ניתוק האובייקט מהסשן הוא חוזר
+    # מהמטמון שלו, ו-``expire_all`` לבדו היה זורק ObjectDeletedError
+    db.expunge_all()
     assert db.get(Task, doomed.id) is None
     assert client.get("/api/whatsapp/pending").json() == []
 
