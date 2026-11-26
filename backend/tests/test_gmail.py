@@ -1692,3 +1692,45 @@ def test_a_download_reads_googles_id_fresh_each_time(db, monkeypatch):
     assert raw == b"OK"
     assert found.name == "דוח.pdf"
     assert seen, "ההורדה חייבת להשתמש במזהה שנקרא עכשיו, ולא בזה שהוחזר קודם"
+
+
+def test_a_real_attachment_that_also_carries_a_content_id_is_kept(db, monkeypatch):
+    """⚠️⚠️ **``Content-Disposition`` מכריע, לא ``Content-ID``.**
+
+    הכלל הראשון סינן כל חלק שיש לו ``Content-ID``, והוא היה נכון על
+    ארבעה מיילים אמיתיים **ונשבר על החמישי**: מייל מועבר עם כרטסת
+    שלח ``Report.pdf`` עם ``attachment`` **וגם** ``Content-ID``,
+    והקובץ נעלם מהמסך — בדיוק המקרה שהמשתמש התלונן עליו.
+    """
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda session, path, params=None: {
+            "id": "gid-fwd",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    part(
+                        "application/pdf",
+                        "Report.pdf",
+                        "pdf-9",
+                        [
+                            {"name": "Content-Disposition", "value": 'attachment; filename="Report.pdf"'},
+                            {"name": "Content-ID", "value": "<f_abc>"},
+                        ],
+                        size=33016,
+                    ),
+                    part(
+                        "image/png",
+                        "logo.png",
+                        "img-9",
+                        [
+                            {"name": "Content-Disposition", "value": "inline"},
+                            {"name": "Content-ID", "value": "<logo>"},
+                        ],
+                    ),
+                ],
+            },
+        },
+    )
+    assert [one.name for one in gmail.fetch_full(db, "gid-fwd").attachments] == ["Report.pdf"]
