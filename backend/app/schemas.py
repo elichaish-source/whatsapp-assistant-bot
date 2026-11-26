@@ -6,8 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ProjectStatus = Literal["active", "done"]
 TaskStatus = Literal["open", "done"]
 Priority = Literal["today", "tomorrow", "week", "later"]
-# מאיפה המשימה הגיעה. הדשבורד מציג אייקון לפי זה
-TaskSource = Literal["whatsapp", "dashboard", "email", "claude"]
+# מאיפה המשימה הגיעה. הדשבורד מציג אייקון לפי זה.
+# ⚠️ ``screen`` הוא הצ'אט שבמסך הוואטסאפ — אותו בוט, ערוץ אחר
+TaskSource = Literal["whatsapp", "screen", "dashboard", "email", "claude"]
 
 
 def _blank_to_none(value):
