@@ -1637,7 +1637,9 @@ def test_an_inline_signature_image_is_not_an_attachment(db, monkeypatch):
     )
     mail = gmail.fetch_full(db, "gid-1")
     assert [one.name for one in mail.attachments] == ["Kabala_119436.pdf"]
-    assert mail.attachments[0].id == "pdf-1"
+    # ⚠️ הנתיב בעץ ולא המזהה של גוגל: הוא מתחלף בין קריאה לקריאה
+    assert mail.attachments[0].id == "0.1"
+    assert mail.attachments[0].remote_id == "pdf-1"
     assert mail.attachments[0].size == 238099
 
 
@@ -1658,3 +1660,35 @@ def test_the_same_file_twice_is_listed_once(db, monkeypatch):
         },
     )
     assert [one.name for one in gmail.fetch_full(db, "gid-2").attachments] == ["invite.ics"]
+
+
+def test_a_download_reads_googles_id_fresh_each_time(db, monkeypatch):
+    """⚠️⚠️ **``attachmentId`` של גוגל מתחלף בין קריאה לקריאה.**
+
+    נתפס מול התיבה האמיתית ב-26.11.2026: ההורדה נכשלה על מזהה שנקרא
+    שתי שניות קודם. ⚠️ **ובדיקה לא יכלה לתפוס את זה**, כי הדמיה
+    מחזירה את אותו מזהה פעמיים — ולכן הבדיקה הזאת **משנה אותו בכוונה**
+    בין הקריאות. מה שיציב הוא הנתיב בעץ החלקים.
+    """
+    seen: list[str] = []
+    turns = iter(["first-id", "second-id", "third-id"])
+
+    def fake_get(session, path, params=None):
+        if path.endswith("/attachments/second-id"):
+            seen.append(path)
+            return {"data": base64.urlsafe_b64encode(b"OK").decode().rstrip("=")}
+        return {
+            "id": "gid-9",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [part("application/pdf", "דוח.pdf", next(turns))],
+            },
+        }
+
+    monkeypatch.setattr(gmail, "_get", fake_get)
+    listed = gmail.fetch_full(db, "gid-9").attachments
+    assert listed[0].id == "0.0"
+    found, raw = gmail.fetch_attachment(db, "gid-9", listed[0].id)
+    assert raw == b"OK"
+    assert found.name == "דוח.pdf"
+    assert seen, "ההורדה חייבת להשתמש במזהה שנקרא עכשיו, ולא בזה שהוחזר קודם"
