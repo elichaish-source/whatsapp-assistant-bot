@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -412,6 +412,9 @@ class CalendarRefOut(BaseModel):
     id: str
     name: str
     primary: bool = False
+    # ⚠️ **האם מותר לכתוב ליומן.** נגזר מההרשאה שגוגל מחזירה: חדר
+    # הישיבות והחגים הם reader, ולכן המסך אינו מציג עליהם כפתור שינוי
+    writable: bool = False
 
 
 class CalendarEventOut(BaseModel):
@@ -438,6 +441,109 @@ class CalendarEventOut(BaseModel):
     day: date | None = None
     location: str = ""
     attendees: list[str] = []
+    description: str = ""
+    # ⚠️⚠️ **האם זה מופע של פגישה חוזרת.** המסך שואל לפיו "הפגישה הזאת
+    # או כל הסדרה", וכמעט כל הפגישות ביומן האמיתי חוזרות — ולכן בלעדיו
+    # כל שינוי היה חל על מופע אחד בשקט. ⚠️ מזהה הסדרה עצמו **אינו**
+    # נשלח ללקוח: השרת קורא אותו מגוגל כדי שלא יהיה אפשר להצהיר עליו
+    recurring: bool = False
+    # חתימת הגרסה, חוזרת בעדכון כ-``If-Match``
+    etag: str = ""
+
+
+class CalendarPersonOut(BaseModel):
+    """לקוח עם כתובת מייל, לבורר המשתתפים.
+
+    ⚠️ **רשימת הלקוחות ולא אנשי הקשר של גוגל.** אוטוקומפליט מאנשי
+    הקשר דורש הרשאת ``contacts.readonly`` ומסך אישור נוסף, ולכן הבורר
+    מציע את הלקוחות שכבר במסד — ולצידו אפשר להקליד כל כתובת.
+    """
+
+    name: str
+    email: str
+
+
+class EventIn(BaseModel):
+    """פגישה חדשה מהמסך.
+
+    ⚠️⚠️ **``notify`` הוא האישור לשליחת הזמנה, והוא ברירת מחדל False.**
+    זימון הוא הפעולה היחידה ביומן שאי אפשר לבטל: גוגל שולחת מייל בשם
+    המשתמש, ומחיקת האירוע אינה מוציאה אותו מהתיבה של הנמען. לכן מוסיפים
+    משתתפים בלי לשלוח, אלא אם המשתמש אישר במפורש במסך.
+    """
+
+    ⚠️⚠️ **יום ושעות, ולא ``datetime`` מוכן.** השעה שהמשתמש הקליד היא
+    שעת קיר — "11:00" — והמרתה לנקודת זמן שייכת לשרת, שהוא זה שמחזיק
+    את ``Asia/Jerusalem``. אם הדפדפן היה מרכיב אותה, פגישה שנקבעת
+    ממחשב באזור זמן אחר הייתה נשמרת בשעה הלא נכונה **בשקט** — בדיוק
+    הלקח של ``today_local`` ב-4ב-4.
+    """
+
+    title: str = Field(min_length=1, max_length=300)
+    day: date
+    start_time: time
+    end_time: time
+    calendar_id: str = ""
+    location: str = Field(default="", max_length=300)
+    description: str = Field(default="", max_length=4000)
+    attendees: list[str] = []
+    notify: bool = False
+    # ⚠️ התנגשות אינה שגיאה אלא שאלה: הפנייה הראשונה מחזירה 409 עם מה
+    # שתפוס, והמשתמש מחליט. ``force`` הוא התשובה שלו
+    force: bool = False
+
+    @field_validator("end_time")
+    @classmethod
+    def _after_start(cls, value: time, info):
+        start = info.data.get("start_time")
+        if start is not None and value <= start:
+            raise ValueError("הסיום חייב להיות אחרי ההתחלה")
+        return value
+
+
+class EventPatch(BaseModel):
+    """שינוי של פגישה קיימת. ⚠️ ``None`` הוא "לא נגעת", לא "לרוקן".
+
+    ⚠️ **זמן משתנה כיחידה אחת:** יום, שעת התחלה ושעת סיום באים יחד או
+    לא באים כלל. "רק שעת הסיום" היה דורש לקרוא את ההתחלה מהמסך ולסמוך
+    עליה, ושני מסכים פתוחים היו נותנים תוצאות שונות.
+    """
+
+    title: str | None = Field(default=None, max_length=300)
+    day: date | None = None
+    start_time: time | None = None
+    end_time: time | None = None
+    location: str | None = Field(default=None, max_length=300)
+    description: str | None = Field(default=None, max_length=4000)
+    attendees: list[str] | None = None
+    notify: bool = False
+    force: bool = False
+    etag: str = ""
+    calendar_id: str = ""
+    # ⚠️⚠️ **"הפגישה הזאת" או "כל הסדרה".** ברירת המחדל היא המופע הבודד,
+    # כי היא הפחות הרסנית — שינוי סדרה נוגע גם בפגישות שהמשתמש לא ראה
+    whole_series: bool = False
+
+    @field_validator("end_time")
+    @classmethod
+    def _whole_time(cls, value: time | None, info):
+        given = [info.data.get("day"), info.data.get("start_time"), value]
+        if any(part is not None for part in given) and not all(
+            part is not None for part in given
+        ):
+            raise ValueError("יום, שעת התחלה ושעת סיום באים יחד")
+        start = info.data.get("start_time")
+        if start is not None and value is not None and value <= start:
+            raise ValueError("הסיום חייב להיות אחרי ההתחלה")
+        return value
+
+
+class EventSaved(BaseModel):
+    """תוצאת שמירה. ``invited`` אומר אם באמת יצאה הזמנה."""
+
+    id: str
+    calendar_id: str = ""
+    invited: bool = False
 
 
 class CalendarOut(BaseModel):
