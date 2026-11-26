@@ -286,8 +286,15 @@ export default function Calendar() {
       setDragging("");
       if (!moved) return;
       // ⚠️ הלחיצה מגיעה אחרי ה-pointerup, ובלי הדגל הזה כל גרירה
-      // הייתה גם פותחת את חלון הפרטים
+      // הייתה גם פותחת את חלון הפרטים.
+      // ⚠️⚠️ **והוא נמחק אחרי רבע שנייה ולא רק בלחיצה הבאה.** נתפס
+      // באימות מול היומן האמיתי ב-26.11.2026: כשהדפדפן אינו שולח
+      // ‏``click`` אחרי גרירה — וזה קורה — הדגל נשאר דלוק, **והלחיצה
+      // הבאה על פגישה נבלעת בשקט.** למשתמש זה נראה כמסך תקוע
       dragged.current = true;
+      window.setTimeout(() => {
+        dragged.current = false;
+      }, 250);
       const under = (document.elementFromPoint(u.clientX, u.clientY) as HTMLElement | null)
         ?.closest(".cal-col") as HTMLElement | null;
       const landed = under ?? column;
