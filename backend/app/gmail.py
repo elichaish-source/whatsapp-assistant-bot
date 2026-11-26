@@ -109,12 +109,22 @@ class EmailSummary:
 @dataclass
 class Attachment:
     """קובץ מצורף אחד. ⚠️ **מזהה ושם, לא תוכן** — הבייטים אינם נשמרים
-    בשום מקום, והם נמשכים מגוגל רק כשהמשתמש לוחץ להוריד."""
+    בשום מקום, והם נמשכים מגוגל רק כשהמשתמש לוחץ להוריד.
+
+    ⚠️⚠️ **``id`` הוא הנתיב שלנו בעץ החלקים ("1.2"), ולא המזהה של
+    גוגל.** נתפס מול התיבה האמיתית ב-26.11.2026: ``attachmentId``
+    **מתחלף בין קריאה לקריאה** לאותו מייל עצמו, ולכן קישור הורדה
+    שבנוי עליו **שבור תמיד** — והוא נכשל בדיוק אחרי שהמשתמש לוחץ.
+    ⚠️ **ובדיקה לא יכלה לתפוס את זה**, כי הדמיה מחזירה את אותו מזהה
+    פעמיים. הנתיב בעץ יציב, כי מבנה המייל אינו משתנה.
+    """
 
     id: str
     name: str
     mime: str = ""
     size: int = 0
+    # ⚠️ המזהה של גוגל, לשימוש **באותה קריאה בלבד**. אינו נשלח ללקוח
+    remote_id: str = ""
 
 
 @dataclass
@@ -627,7 +637,9 @@ def _html_to_text(raw: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _walk(part: dict, texts: list[tuple[str, str]], names: list[Attachment]) -> None:
+def _walk(
+    part: dict, texts: list[tuple[str, str]], names: list[Attachment], path: str = "0"
+) -> None:
     """עובר על עץ החלקים ואוסף טקסט וקבצים מצורפים.
 
     ⚠️⚠️ **תמונה מוטבעת אינה קובץ מצורף, וההפרדה נמדדה בדואר אמיתי**
@@ -645,12 +657,13 @@ def _walk(part: dict, texts: list[tuple[str, str]], names: list[Attachment]) -> 
     if filename and not inline:
         names.append(
             Attachment(
-                # ⚠️ המזהה של גוגל, וזה מה שמאפשר להוריד בפועל. בלעדיו
-                # היה אפשר רק להציג שם — וזאת הייתה התלונה
-                id=str(body.get("attachmentId") or ""),
+                # ⚠️⚠️ **הנתיב בעץ, לא המזהה של גוגל.** ‏``attachmentId``
+                # מתחלף בין קריאה לקריאה, וקישור שבנוי עליו נשבר
+                id=path,
                 name=filename,
                 mime=mime,
                 size=int(body.get("size") or 0),
+                remote_id=str(body.get("attachmentId") or ""),
             )
         )
     elif mime in ("text/plain", "text/html"):
@@ -658,8 +671,8 @@ def _walk(part: dict, texts: list[tuple[str, str]], names: list[Attachment]) -> 
         if decoded.strip():
             texts.append((mime, decoded))
 
-    for child in part.get("parts") or []:
-        _walk(child, texts, names)
+    for index, child in enumerate(part.get("parts") or []):
+        _walk(child, texts, names, f"{path}.{index}")
 
 
 def fetch_full(db: Session, message_id: str) -> EmailFull:
@@ -1754,11 +1767,21 @@ def fetch_attachment(db: Session, message_id: str, attachment_id: str) -> tuple[
     ⚠️ **שום בייט אינו נשמר.** הקובץ נמשך בלחיצה, עובר לדפדפן, ונזרק —
     בדיוק כמו גוף המייל, וזאת ההבטחה ב-``privacy.html``.
 
+    ⚠️⚠️ **המזהה של גוגל נקרא **מאותה קריאה** שבה מוצא החלק.** הוא
+    מתחלף בין קריאה לקריאה (נמדד מול התיבה האמיתית), ולכן אי אפשר
+    לשמור אותו ואי אפשר לקבל אותו מהלקוח — ומה שכן יציב הוא הנתיב
+    בעץ החלקים, שהוא ``attachment_id`` כאן.
+
     מרים ``FileNotFoundError`` כשאין קובץ כזה במייל.
     """
-    full = fetch_full(db, message_id)
-    found = next((one for one in full.attachments if one.id == attachment_id), None)
-    if found is None:
+    data = _get(db, f"messages/{message_id}", {"format": "full"})
+    texts: list[tuple[str, str]] = []
+    parts: list[Attachment] = []
+    _walk(data.get("payload") or {}, texts, parts)
+    found = next((one for one in parts if one.id == attachment_id), None)
+    if found is None or not found.remote_id:
         raise FileNotFoundError(attachment_id)
-    data = _get(db, f"messages/{message_id}/attachments/{quote(attachment_id, safe='')}")
-    return found, _b64(str(data.get("data") or ""))
+    body = _get(
+        db, f"messages/{message_id}/attachments/{quote(found.remote_id, safe='')}"
+    )
+    return found, _b64(str(body.get("data") or ""))
