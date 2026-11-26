@@ -332,11 +332,16 @@ def announce_disconnect(db: Session, cred: GoogleCredential) -> bool:
     phone = get_settings().owner_phone
     if not phone:
         return False
+    # ייבוא מאוחר: ``bot.outbox`` נשען על המודלים, ו-``gauth`` נטען לפניו
+    from .bot import outbox
+
     try:
-        waha.send_text(
+        outbox.send(
             phone,
             "החיבור לגוגל נותק ואני כבר לא רואה את המייל.\n"
             "אפשר לחבר מחדש בדשבורד, בהגדרות ← חיבור לגוגל.",
+            outbox.GOOGLE_DISCONNECTED,
+            f"{cred.id}-{now():%Y%m%d%H%M%S}",
         )
     except waha.WahaError:
         # לא מסמנים כנשלח, כדי שהסבב הבא ינסה שוב

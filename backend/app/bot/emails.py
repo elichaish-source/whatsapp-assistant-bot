@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from .. import gauth, gmail
 from ..models import BotMessage
-from .actions import Outcome
+from .actions import WHATSAPP, Outcome
 from .intent import Intent
 
 log = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ NOT_YET = (
 )
 
 
-def email_not_yet(db: Session, intent: Intent) -> Outcome:
+def email_not_yet(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """פעולה על מייל שטרם נבנתה. עונה בכוונה בלי להבטיח מתי."""
     return Outcome(NOT_YET)
 
@@ -144,7 +144,7 @@ def _hint(count: int) -> str:
 # --- סיכום לפי בקשה ---
 
 
-def list_emails(db: Session, intent: Intent) -> Outcome:
+def list_emails(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """"מה נכנס היום" — מה שלא נקרא בלשונית "ראשי", אחרי סינון.
 
     שלוש ההכרעות של המשתמש מיושמות כאן: רק מה שלא נקרא, ‏Haiku כותב את
@@ -201,7 +201,7 @@ def list_emails(db: Session, intent: Intent) -> Outcome:
 # --- חיפוש ---
 
 
-def search_emails(db: Session, intent: Intent) -> Outcome:
+def search_emails(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """"מה כתב לי דני" — על כל התיבה, בלי סינון ובלי לשונית.
 
     ‏⚠️ אין כאן ``triage``: בחיפוש המשתמש כבר אמר מה הוא מחפש, וסינון
@@ -241,7 +241,7 @@ def search_emails(db: Session, intent: Intent) -> Outcome:
 # --- מייל מלא ---
 
 
-def _resolve(db: Session, number: int) -> str | None:
+def _resolve(db: Session, number: int, channel: str = WHATSAPP) -> str | None:
     """מתרגם מספר לרשימת המיילים האחרונה שהבוט שלח.
 
     אותו דפוס של ``_resolve_by_number`` למשימות, ובכוונה: המשתמש לא אמור
@@ -249,7 +249,7 @@ def _resolve(db: Session, number: int) -> str | None:
     """
     row = db.scalars(
         select(BotMessage)
-        .where(BotMessage.listed_email_ids.is_not(None))
+        .where(BotMessage.listed_email_ids.is_not(None), BotMessage.channel == channel)
         .order_by(BotMessage.id.desc())
         .limit(1)
     ).first()
@@ -296,7 +296,7 @@ def _render(mail: gmail.EmailFull) -> str:
         )
 
 
-def show_email(db: Session, intent: Intent) -> Outcome:
+def show_email(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     """"תראה לי את מייל 2" — **תקציר** של המייל, ולא המלל שלו.
 
     ‏⚠️ **שונה ב-23.11.2026.** עד אז הוא הדפיס את המייל המלא, וזו הייתה
@@ -310,7 +310,7 @@ def show_email(db: Session, intent: Intent) -> Outcome:
 
     message_id: str | None = None
     if intent.task_number:
-        message_id = _resolve(db, intent.task_number)
+        message_id = _resolve(db, intent.task_number, channel)
         if message_id is None:
             return Outcome(
                 'לא מצאתי מייל במספר הזה. אפשר לבקש "מה נכנס היום" ולנסות שוב.'

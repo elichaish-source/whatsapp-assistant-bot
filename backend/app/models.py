@@ -12,6 +12,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -170,10 +171,30 @@ class BotMessage(Base):
     """
 
     __tablename__ = "bot_messages"
+    __table_args__ = (
+        CheckConstraint("channel IN ('whatsapp', 'screen')", name="bot_message_channel"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # מזהה ההודעה של וואטסאפ, כפי שהוא מגיע ב-payload.id
+    # מזהה ההודעה של וואטסאפ, כפי שהוא מגיע ב-payload.id. להודעה שנכתבה
+    # במסך אין מזהה כזה, ולכן נכתב מזהה מלאכותי עם תחילית — העמודה
+    # נשארת ייחודית, וזה מה שמונע טיפול כפול באותה הודעה
     wa_message_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    # ‏whatsapp או screen. ⚠️⚠️ **המספור והאישור נפתרים מול ההודעה
+    # הקודמת של אותו ערוץ בלבד.** בלי זה הודעה שנכתבה במסך הופכת
+    # ל"הקודמת", ו"סיימתי 2" שהוקלד בוואטסאפ סוגר את המשימה הלא נכונה
+    channel: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="whatsapp", default="whatsapp"
+    )
+    # הודעה שהמערכת יזמה: תזכורת, סיכום, התראה או תדריך. ⚠️ כל פותר
+    # שמחפש את "ההודעה הקודמת" מדלג עליה — תזכורת שנחתה בין "למחוק?"
+    # לבין "כן" הייתה מבטלת את האישור
+    initiated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    # מתי המשתמש סימן שההתראה טופלה. ⚠️ סימון מפורש שלו, לא ניחוש של
+    # המערכת: בלעדיו "התראות שלא טופלו" אינה יכולה להבדיל בין נשלח לפתוח
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     body: Mapped[str | None] = mapped_column(Text)
     intent: Mapped[str | None] = mapped_column(String(40))
     reply: Mapped[str | None] = mapped_column(Text)

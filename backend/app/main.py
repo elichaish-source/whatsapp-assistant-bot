@@ -18,6 +18,7 @@ from .routers import (
     projects,
     recurrences,
     tasks,
+    whatsapp,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +59,7 @@ for module in (
     emails,
     calendar,
     bot,
+    whatsapp,
 ):
     app.include_router(module.router)
 

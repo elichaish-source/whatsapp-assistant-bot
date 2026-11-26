@@ -575,3 +575,95 @@ class CalendarOut(BaseModel):
     today: date
     calendars: list[CalendarRefOut] = []
     events: list[CalendarEventOut] = []
+
+
+# --- מסך הוואטסאפ: הבוט בדשבורד ---
+
+# ⚠️ הערוץ שבו ההודעה נכתבה. **כל שורה במסך מסומנת**, אחרת המשתמש רואה
+# רשימה ממוספרת מוואטסאפ בתוך המסך ומניח שהמספרים שם תקפים גם כאן
+BotChannel = Literal["whatsapp", "screen"]
+
+
+class BotListedTaskOut(BaseModel):
+    """משימה שהוצגה בתשובה, לכפתור "סיימתי".
+
+    ⚠️ **הנתון כבר קיים** — ``bot_messages.listed_task_ids`` הוא בדיוק
+    מה ש-``_resolve_by_number`` קורא היום. המסך מרנדר את אותה עמודה
+    ככפתורים במקום מספרים, ואין כאן שום דבר חדש מהמודל.
+    """
+
+    number: int
+    id: int
+    title: str
+    status: str
+
+
+class BotMessageOut(BaseModel):
+    """שורה אחת ביומן ההודעות, כפי שהמסך מציג אותה."""
+
+    id: int
+    channel: BotChannel
+    # הודעה שהמערכת יזמה (תזכורת, סיכום, התראה, תדריך) ולא המשתמש
+    initiated: bool
+    # ``body`` ריק בהודעה יוזמת — אין שם צד ששאל
+    body: str | None = None
+    reply: str | None = None
+    intent: str | None = None
+    error: str | None = None
+    created_at: datetime
+    handled_at: datetime | None = None
+    tasks: list[BotListedTaskOut] = []
+    # מזהי המיילים שהוצגו, לפי הסדר. המסך הופך אותם לקישורים למסך
+    # המיילים — שם כבר יש ארכוב, מענה והפוך למשימה
+    emails: list[str] = []
+    # השאלה שמחכה ל"כן" בשורה הזאת, אם היא עדיין ההודעה האחרונה
+    pending: str | None = None
+
+
+class BotHistoryOut(BaseModel):
+    messages: list[BotMessageOut] = []
+    # האם יש עוד אחורה. המסך מציג כפתור "עוד"
+    more: bool = False
+
+
+class BotSayIn(BaseModel):
+    """הודעה שנכתבה במסך.
+
+    ⚠️⚠️ **היא נענית במסך בלבד ואינה יוצאת בוואטסאפ.** אחרת וואטסאפ
+    מתמלא בהדים של עבודה שנעשתה במסך.
+    """
+
+    body: str = Field(min_length=1, max_length=1000)
+
+
+class BotStatusOut(BaseModel):
+    """מצב החיבור לוואטסאפ, כפי ש-WAHA מדווחת אותו.
+
+    ``state`` הוא ``connected`` / ``scan`` / ``failed`` / ``starting`` /
+    ``unknown``, ו-``unreachable`` אומר שהשרת שלנו לא הצליח להגיע
+    ל-WAHA בכלל — ⚠️ זה שונה מ"וואטסאפ ניתקה אותנו".
+    """
+
+    state: str
+    raw: str = ""
+    phone: str = ""
+    message: str = ""
+
+
+class BotPendingOut(BaseModel):
+    """פעולה שהבוט שאל עליה ולא אושרה בזמן.
+
+    ⚠️⚠️ **היום זה מתאדה בשקט**: ביקשת למחוק, לא ענית "כן" בתוך רבע
+    שעה, ושום דבר לא נמחק ושום דבר לא אמר לך.
+    """
+
+    id: int
+    channel: BotChannel
+    created_at: datetime
+    # מה הבוט שאל, כפי שנשלח. זה מה שהמשתמש מזהה
+    question: str
+    # תיאור קצר של הפעולה עצמה, מתוך ``pending_json``
+    summary: str
+    kind: str
+    # האם עדיין אפשר לבצע אותה. פעולה שהפריט שלה כבר לא קיים יורדת
+    executable: bool = True

@@ -341,3 +341,59 @@ export interface EventDraft {
   recurring: boolean;
   etag: string;
 }
+
+/* --- מסך הוואטסאפ: הבוט בדשבורד --- */
+
+/**
+ * הערוץ שבו ההודעה נכתבה.
+ * ⚠️ **כל שורה מסומנת.** ההיסטוריה היא של שני הערוצים יחד — זה כל
+ * הרעיון של שיקוף — ובלי הסימון המשתמש רואה רשימה ממוספרת שהוצגה
+ * בוואטסאפ בתוך המסך, ומניח שהמספרים שם תקפים גם כאן.
+ */
+export type BotChannel = "whatsapp" | "screen";
+
+/** משימה שהוצגה בתשובה, מאחורי כפתור "סיימתי" */
+export interface BotListedTask {
+  number: number;
+  id: number;
+  title: string;
+  status: string;
+}
+
+export interface BotMessage {
+  id: number;
+  channel: BotChannel;
+  /** הודעה שהמערכת יזמה (תזכורת, סיכום, התראה, תדריך) ולא המשתמש */
+  initiated: boolean;
+  body: string | null;
+  reply: string | null;
+  intent: string | null;
+  error: string | null;
+  created_at: string;
+  handled_at: string | null;
+  tasks: BotListedTask[];
+  emails: string[];
+  pending: string | null;
+}
+
+export interface BotHistory {
+  messages: BotMessage[];
+  more: boolean;
+}
+
+export interface BotStatus {
+  state: string;
+  raw: string;
+  phone: string;
+  message: string;
+}
+
+export interface BotPending {
+  id: number;
+  channel: BotChannel;
+  created_at: string;
+  question: string;
+  summary: string;
+  kind: string;
+  executable: boolean;
+}
