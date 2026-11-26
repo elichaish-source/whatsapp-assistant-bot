@@ -194,6 +194,18 @@ export interface MailList {
   truncated: boolean;
 }
 
+/**
+ * קובץ מצורף אחד.
+ * ⚠️ `id` הוא המזהה של גוגל, והוא מה שמאפשר להוריד — לא רק להציג שם.
+ * ⚠️ תמונה מוטבעת בחתימה מסוננת בשרת ואינה מגיעה לכאן.
+ */
+export interface EmailAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
 /** המייל המלא לקריאה. ⚠️ `body` הוא טקסט ולא HTML, ומוצג כטקסט */
 export interface MailBody {
   id: string;
@@ -204,7 +216,7 @@ export interface MailBody {
   subject: string;
   received_at: string;
   body: string;
-  attachments: string[];
+  attachments: EmailAttachment[];
   // האם נחתכה היסטוריה מצוטטת. נאמר למשתמש, כדי שידע שיש עוד
   quoted_removed: boolean;
 }

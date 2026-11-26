@@ -632,7 +632,7 @@ def test_attachment_names_are_collected_and_the_body_is_not_the_attachment(db, m
         },
     )
     mail = gmail.fetch_full(db, "gid-1")
-    assert mail.attachments == ["מכתב.pdf"]
+    assert [one.name for one in mail.attachments] == ["מכתב.pdf"]
     assert mail.body == "הטקסט"
 
 
@@ -794,7 +794,7 @@ def test_summarize_uses_the_cheap_model(monkeypatch):
 def test_summarize_sends_the_body_and_the_subject(monkeypatch):
     captured: dict = {}
     fake_anthropic(monkeypatch, '{"summary": "תקציר"}', captured)
-    gmail.summarize(full_mail(body="נא לשלם 847 שקל", attachments=["חשבון.pdf"]))
+    gmail.summarize(full_mail(body="נא לשלם 847 שקל", attachments=[gmail.Attachment(id="a1", name="חשבון.pdf")]))
     content = captured["messages"][0]["content"]
     assert "נא לשלם 847 שקל" in content
     assert "החוזה" in content
@@ -1578,3 +1578,83 @@ def test_the_prepared_cache_is_bounded(monkeypatch):
         gmail.remember_prepared(f"gid-{number}", moment, task=gmail.TaskDraft("x", "", ""))
     assert len(gmail._prepared) <= 6
     gmail.clear_prepared()
+
+
+# --- קבצים מצורפים: הפרדה מתמונות מוטבעות, והורדה (26.11.2026) ---
+
+
+def part(mime: str, filename: str = "", attachment_id: str = "", headers=None, size: int = 0):
+    return {
+        "mimeType": mime,
+        "filename": filename,
+        "body": {"attachmentId": attachment_id, "size": size} if attachment_id else {},
+        "headers": headers or [],
+    }
+
+
+def test_an_inline_signature_image_is_not_an_attachment(db, monkeypatch):
+    """⚠️⚠️ נמדד בדואר אמיתי ב-26.11.2026, ולא נוחש.
+
+    הקבלה האמיתית הגיעה עם ``Content-Disposition: attachment``, ושני
+    הלוגואים בחתימה עם ``inline`` **ועם ``Content-ID``** — ואחד מהם
+    נקרא ``/TempLogo/7017900_3.jpg``. בלי ההפרדה הרשימה הציגה את
+    הלוגו ליד הקבלה, כלומר רעש שנראה כמו מידע.
+    """
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda session, path, params=None: {
+            "id": "gid-1",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "headers": [{"name": "Subject", "value": "קבלה"}],
+                "parts": [
+                    {
+                        "mimeType": "multipart/related",
+                        "parts": [
+                            part("text/html"),
+                            part(
+                                "image/png",
+                                "/TempLogo/7017900_3.jpg",
+                                "img-1",
+                                [
+                                    {"name": "Content-Disposition", "value": 'inline; filename="/TempLogo/7017900_3.jpg"'},
+                                    {"name": "Content-ID", "value": "<logo>"},
+                                ],
+                            ),
+                        ],
+                    },
+                    part(
+                        "application/pdf",
+                        "Kabala_119436.pdf",
+                        "pdf-1",
+                        [{"name": "Content-Disposition", "value": 'attachment; filename="Kabala_119436.pdf"'}],
+                        size=238099,
+                    ),
+                ],
+            },
+        },
+    )
+    mail = gmail.fetch_full(db, "gid-1")
+    assert [one.name for one in mail.attachments] == ["Kabala_119436.pdf"]
+    assert mail.attachments[0].id == "pdf-1"
+    assert mail.attachments[0].size == 238099
+
+
+def test_the_same_file_twice_is_listed_once(db, monkeypatch):
+    """⚠️ הזמנת יומן מגיעה פעמיים, בשני סוגי MIME, ונראית כשני קבצים."""
+    monkeypatch.setattr(
+        gmail,
+        "_get",
+        lambda session, path, params=None: {
+            "id": "gid-2",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    part("text/calendar", "invite.ics", "ics-1"),
+                    part("application/ics", "invite.ics", "ics-2"),
+                ],
+            },
+        },
+    )
+    assert [one.name for one in gmail.fetch_full(db, "gid-2").attachments] == ["invite.ics"]

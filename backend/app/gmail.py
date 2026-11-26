@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import parseaddr
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -106,6 +107,17 @@ class EmailSummary:
 
 
 @dataclass
+class Attachment:
+    """קובץ מצורף אחד. ⚠️ **מזהה ושם, לא תוכן** — הבייטים אינם נשמרים
+    בשום מקום, והם נמשכים מגוגל רק כשהמשתמש לוחץ להוריד."""
+
+    id: str
+    name: str
+    mime: str = ""
+    size: int = 0
+
+
+@dataclass
 class EmailFull:
     """מייל מלא להצגה, אחרי ניקוי ההיסטוריה המצוטטת."""
 
@@ -117,7 +129,7 @@ class EmailFull:
     subject: str
     received_at: datetime
     body: str
-    attachments: list[str] = field(default_factory=list)
+    attachments: list[Attachment] = field(default_factory=list)
     # האם נחתכה היסטוריה מצוטטת. מוצג למשתמש, כדי שידע שיש עוד
     quoted_removed: bool = False
 
@@ -615,14 +627,32 @@ def _html_to_text(raw: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _walk(part: dict, texts: list[tuple[str, str]], names: list[str]) -> None:
-    """עובר על עץ החלקים ואוסף טקסט וקבצים מצורפים."""
+def _walk(part: dict, texts: list[tuple[str, str]], names: list[Attachment]) -> None:
+    """עובר על עץ החלקים ואוסף טקסט וקבצים מצורפים.
+
+    ⚠️⚠️ **תמונה מוטבעת אינה קובץ מצורף, וההפרדה נמדדה בדואר אמיתי**
+    (‏26.11.2026): הקובץ האמיתי מגיע עם ``Content-Disposition: attachment``,
+    ולוגו בחתימה מגיע עם ``inline`` **ועם ``Content-ID``**. בלי ההבחנה
+    הזאת הרשימה הציגה ``/TempLogo/7017900_3.jpg`` ליד קבלה אמיתית —
+    כלומר רעש שנראה כמו מידע, וזה בדיוק מה שמלמד להתעלם מהשורה.
+    """
     mime = str(part.get("mimeType") or "")
     filename = str(part.get("filename") or "")
     body = part.get("body") or {}
+    head = {str(h.get("name", "")).lower(): str(h.get("value", "")) for h in part.get("headers") or []}
+    inline = "inline" in head.get("content-disposition", "").lower() or bool(head.get("content-id"))
 
-    if filename:
-        names.append(filename)
+    if filename and not inline:
+        names.append(
+            Attachment(
+                # ⚠️ המזהה של גוגל, וזה מה שמאפשר להוריד בפועל. בלעדיו
+                # היה אפשר רק להציג שם — וזאת הייתה התלונה
+                id=str(body.get("attachmentId") or ""),
+                name=filename,
+                mime=mime,
+                size=int(body.get("size") or 0),
+            )
+        )
     elif mime in ("text/plain", "text/html"):
         decoded = _b64(str(body.get("data") or "")).decode("utf-8", errors="replace")
         if decoded.strip():
@@ -643,8 +673,17 @@ def fetch_full(db: Session, message_id: str) -> EmailFull:
     head = _headers(payload)
 
     texts: list[tuple[str, str]] = []
-    names: list[str] = []
-    _walk(payload, texts, names)
+    found: list[Attachment] = []
+    _walk(payload, texts, found)
+    # ⚠️ הזמנת יומן מגיעה פעמיים (``text/calendar`` ו-``application/ics``)
+    # ונראית כשני קבצים. ⚠️ **לפי שם ולא לפי מזהה** — המזהים שונים
+    names: list[Attachment] = []
+    seen: set[str] = set()
+    for one in found:
+        if one.name in seen:
+            continue
+        seen.add(one.name)
+        names.append(one)
 
     # ‏text/plain עדיף: הוא מה שהשולח כתב, בלי שכבת העיצוב באמצע
     plain = next((value for mime, value in texts if mime == "text/plain"), "")
@@ -938,7 +977,7 @@ def summarize(mail: EmailFull) -> str:
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=60.0)
     details = f"נושא: {mail.subject}\nשולח: {mail.sender()}"
     if mail.attachments:
-        details += f"\nמצורף: {', '.join(mail.attachments[:5])}"
+        details += f"\nמצורף: {', '.join(one.name for one in mail.attachments[:5])}"
     try:
         response = client.messages.create(
             model=settings.claude_haiku_model,
@@ -1703,3 +1742,23 @@ def inbox_counts(db: Session) -> InboxCounts:
         today=count(today_query),
         important_today=count(f"{today_query} is:unread {_EXCLUDED_TABS}"),
     )
+
+
+def fetch_attachment(db: Session, message_id: str, attachment_id: str) -> tuple[Attachment, bytes]:
+    """הבייטים של קובץ מצורף, ישר מגוגל.
+
+    ⚠️⚠️ **השם והסוג נקראים מהמייל ולא מהכתובת.** בקשה אינה יכולה
+    להכתיב שם קובץ, ולכן אי אפשר להזריק דרכה כותרת תגובה או להציג
+    ‏PDF בשם ``.exe``. המזהה בכתובת משמש **רק** למציאת החלק הנכון.
+
+    ⚠️ **שום בייט אינו נשמר.** הקובץ נמשך בלחיצה, עובר לדפדפן, ונזרק —
+    בדיוק כמו גוף המייל, וזאת ההבטחה ב-``privacy.html``.
+
+    מרים ``FileNotFoundError`` כשאין קובץ כזה במייל.
+    """
+    full = fetch_full(db, message_id)
+    found = next((one for one in full.attachments if one.id == attachment_id), None)
+    if found is None:
+        raise FileNotFoundError(attachment_id)
+    data = _get(db, f"messages/{message_id}/attachments/{quote(attachment_id, safe='')}")
+    return found, _b64(str(data.get("data") or ""))

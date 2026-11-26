@@ -344,9 +344,23 @@ export default function Mail() {
             <p className="muted">טוען את המייל…</p>
           ) : (
             <div className="details">
+              {/* ⚠️ קישור הורדה ולא רק שם: שם קובץ לבדו אינו "להראות
+                  קבצים מצורפים" — צריך לפתוח אותו. ⚠️ `download` כדי
+                  שהדפדפן ישמור במקום לנווט, ו-`rel="noreferrer"` כרגיל */}
               {open.attachments.length > 0 && (
-                <div className="muted">
-                  📎 {open.attachments.join(" · ")}
+                <div className="chips">
+                  {open.attachments.map((file) => (
+                    <a
+                      key={file.id || file.name}
+                      className="chip"
+                      href={`/api/emails/${encodeURIComponent(open.id)}/attachments/${encodeURIComponent(file.id)}`}
+                      download={file.name}
+                      rel="noreferrer"
+                    >
+                      📎 {file.name}
+                      {file.size > 0 && ` · ${Math.max(1, Math.round(file.size / 1024))}KB`}
+                    </a>
+                  ))}
                 </div>
               )}
               {/* ⚠️ טקסט, לא HTML. מייל הוא מה שאדם אחר כתב, ו-dangerouslySetInnerHTML
