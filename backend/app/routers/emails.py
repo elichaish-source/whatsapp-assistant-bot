@@ -19,7 +19,9 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -28,6 +30,7 @@ from ..auth import require_user
 from ..db import get_db
 from ..models import Client
 from ..schemas import (
+    EmailAttachmentOut,
     EmailBodyOut,
     EmailIdsIn,
     EmailIdsOut,
@@ -296,6 +299,45 @@ def read_email(message_id: str, db: Session = Depends(get_db)) -> EmailBodyOut:
         subject=mail.subject,
         received_at=mail.received_at,
         body=mail.body,
-        attachments=mail.attachments,
+        attachments=[
+            EmailAttachmentOut(id=one.id, name=one.name, mime=one.mime, size=one.size)
+            for one in mail.attachments
+        ],
         quoted_removed=mail.quoted_removed,
+    )
+
+
+@router.get("/{message_id}/attachments/{attachment_id}")
+def download_attachment(
+    message_id: str, attachment_id: str, db: Session = Depends(get_db)
+) -> Response:
+    """מוריד קובץ מצורף.
+
+    ⚠️⚠️ **שם הקובץ נקרא מהמייל ולא מהכתובת.** בקשה אינה יכולה להכתיב
+    שם, ולכן אי אפשר להזריק דרכה כותרת תגובה. ⚠️ **והשם מנוקה מקו נטוי
+    ומתווי שורה** — בדואר אמיתי נמצא קובץ בשם ``/TempLogo/7017900_3.jpg``,
+    כלומר שם עם נתיב בתוכו, וזה לא תיאורטי.
+
+    ⚠️ **שום בייט אינו נשמר**: נמשך מגוגל, עובר לדפדפן, ונזרק.
+    """
+    _require_connection(db)
+    try:
+        found, raw = gmail.fetch_attachment(db, message_id, attachment_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "הקובץ המצורף לא נמצא במייל") from exc
+    except gauth.GoogleDisconnected as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DISCONNECTED) from exc
+    except (gmail.GmailError, gauth.GoogleError) as exc:
+        log.warning("הורדת קובץ מצורף נכשלה: %s", exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, UNAVAILABLE) from exc
+
+    safe = found.name.replace("\\", "/").split("/")[-1].replace("\r", "").replace("\n", "")
+    return Response(
+        content=raw,
+        media_type=found.mime or "application/octet-stream",
+        headers={
+            # ⚠️ ``filename*`` עם קידוד UTF-8, כי שמות הקבצים כאן בעברית
+            # ("קבלה_על_תרומה_752.pdf") ו-``filename`` לבדו שובר אותם
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe, safe='')}"
+        },
     )

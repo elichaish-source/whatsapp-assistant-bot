@@ -336,6 +336,23 @@ class EmailIdsOut(BaseModel):
     ids: list[str] = []
 
 
+class EmailAttachmentOut(BaseModel):
+    """קובץ מצורף אחד: מה שמאפשר להציג שורה **ולהוריד**.
+
+    ⚠️⚠️ **מזהה ושם, לא תוכן.** הבייטים אינם נשמרים בשום מקום ואינם
+    עוברים כאן — הם נמשכים מגוגל רק בלחיצה על ההורדה.
+
+    ⚠️ **תמונה מוטבעת בחתימה אינה קובץ מצורף** ואינה מגיעה לכאן: היא
+    מסוננת לפי ``Content-Disposition: inline`` ו-``Content-ID``, אחרי
+    שנמדד בדואר אמיתי שהיא הוצגה ליד קבלה כאילו היא קובץ.
+    """
+
+    id: str
+    name: str
+    mime: str = ""
+    size: int = 0
+
+
 class EmailBodyOut(BaseModel):
     """המייל המלא לקריאה במסך, בלי ההיסטוריה המצוטטת."""
 
@@ -347,7 +364,7 @@ class EmailBodyOut(BaseModel):
     subject: str
     received_at: datetime
     body: str
-    attachments: list[str] = []
+    attachments: list[EmailAttachmentOut] = []
     quoted_removed: bool = False
 
 

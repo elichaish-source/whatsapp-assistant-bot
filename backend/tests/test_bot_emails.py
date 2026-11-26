@@ -557,7 +557,7 @@ def test_the_header_is_built_in_code_and_not_by_the_model(db, connected, monkeyp
     לכן טקסט שבתוך המייל אינו יכול לשנות אותם.
     """
     monkeypatch.setattr(
-        gmail, "fetch_full", lambda db_, mid: full(4, attachments=["חוזה.pdf"])
+        gmail, "fetch_full", lambda db_, mid: full(4, attachments=[gmail.Attachment(id="a1", name="חוזה.pdf")])
     )
     summarized(monkeypatch, "תקציר")
     listed(db, ["gid-1"])
@@ -607,7 +607,7 @@ def test_a_summarised_mail_fits_one_whatsapp_message(db, connected, monkeypatch)
 
 def test_attachment_names_are_shown_without_downloading_them(db, connected, monkeypatch):
     monkeypatch.setattr(
-        gmail, "fetch_full", lambda db_, mid: full(attachments=["חוזה.pdf", "נספח.docx"])
+        gmail, "fetch_full", lambda db_, mid: full(attachments=[gmail.Attachment(id="a1", name="חוזה.pdf"), gmail.Attachment(id="a2", name="נספח.docx")])
     )
     listed(db, ["gid-1"])
     outcome = actions.execute(db, Intent(action="show_email", task_number=1))

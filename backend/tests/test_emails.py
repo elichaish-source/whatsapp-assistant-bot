@@ -198,10 +198,21 @@ def test_attachment_names_and_the_quoted_note_reach_the_screen(client, connected
     monkeypatch.setattr(
         gmail,
         "fetch_full",
-        lambda db, mid: full(1, attachments=["חוזה.pdf", "נספח.docx"], quoted_removed=True),
+        lambda db, mid: full(
+            1,
+            attachments=[
+                gmail.Attachment(id="a1", name="חוזה.pdf", mime="application/pdf", size=2048),
+                gmail.Attachment(id="a2", name="נספח.docx"),
+            ],
+            quoted_removed=True,
+        ),
     )
     body = client.get("/api/emails/gid-1").json()
-    assert body["attachments"] == ["חוזה.pdf", "נספח.docx"]
+    # ⚠️ **מזהה ולא רק שם**: בלעדיו המסך יכול להציג ולא להוריד, וזו
+    # בדיוק הייתה התלונה ב-26.11.2026
+    assert [one["name"] for one in body["attachments"]] == ["חוזה.pdf", "נספח.docx"]
+    assert body["attachments"][0]["id"] == "a1"
+    assert body["attachments"][0]["size"] == 2048
     assert body["quoted_removed"] is True
 
 
@@ -1301,3 +1312,53 @@ def test_the_count_does_not_use_googles_estimate(db, connected, monkeypatch):
     result = gmail.inbox_counts(db)
     assert result.week == 3
     assert len(seen) == 3
+
+
+# --- הורדת קובץ מצורף (26.11.2026) ---
+
+
+def test_an_attachment_can_actually_be_downloaded(client, connected, monkeypatch):
+    """⚠️⚠️ **שם קובץ לבדו אינו "להראות קבצים מצורפים".**
+
+    עד 26.11.2026 המסך הציג שם ולא היה שום נתיב להוריד בו את הקובץ.
+    """
+    found = gmail.Attachment(id="a1", name="קבלה.pdf", mime="application/pdf", size=9)
+    monkeypatch.setattr(gmail, "fetch_attachment", lambda db, mid, aid: (found, b"PDF-BYTES"))
+    res = client.get("/api/emails/gid-1/attachments/a1")
+    assert res.status_code == 200
+    assert res.content == b"PDF-BYTES"
+    assert res.headers["content-type"] == "application/pdf"
+    # ⚠️ ``filename*`` בקידוד UTF-8, כי השמות כאן בעברית
+    assert "filename*=UTF-8''" in res.headers["content-disposition"]
+
+
+def test_the_file_name_comes_from_the_mail_and_not_from_the_url(client, connected, monkeypatch):
+    """⚠️⚠️ **בקשה אינה יכולה להכתיב שם קובץ.**
+
+    אחרת היה אפשר להזריק דרכה כותרת תגובה, או להגיש PDF בשם ``.exe``.
+    ⚠️ **ונתיב בתוך השם מנוקה** — בדואר אמיתי נמצא ``/TempLogo/7017900_3.jpg``.
+    """
+    nasty = gmail.Attachment(id="a1", name="/TempLogo/דוח\r\nX-Injected: 1.pdf")
+    monkeypatch.setattr(gmail, "fetch_attachment", lambda db, mid, aid: (nasty, b"X"))
+    res = client.get("/api/emails/gid-1/attachments/a1")
+    assert res.status_code == 200
+    header = res.headers["content-disposition"]
+    assert "\n" not in header and "\r" not in header
+    assert "TempLogo" not in header
+    assert "x-injected" not in {name.lower() for name in res.headers}
+
+
+def test_a_file_that_is_not_in_the_mail_is_a_404(client, connected, monkeypatch):
+    def missing(db, mid, aid):
+        raise FileNotFoundError(aid)
+
+    monkeypatch.setattr(gmail, "fetch_attachment", missing)
+    assert client.get("/api/emails/gid-1/attachments/nope").status_code == 404
+
+
+def test_downloading_needs_a_user(client, monkeypatch):
+    monkeypatch.setattr(
+        gmail, "fetch_attachment", lambda db, mid, aid: (gmail.Attachment(id="a", name="x"), b"")
+    )
+    client.cookies.clear()
+    assert client.get("/api/emails/gid-1/attachments/a1").status_code == 401
