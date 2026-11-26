@@ -254,6 +254,8 @@ def test_a_screen_message_never_goes_out_on_whatsapp(client, sent):
 
     אחרת וואטסאפ מתמלא בהדים של עבודה שנעשתה במסך.
     """
+    # ⚠️ ההתחברות עצמה שולחת קוד בוואטסאפ, ולכן מתאפס כאן ולא בפתיחה
+    sent.clear()
     client.post("/api/whatsapp/messages", json={"body": "מה יש לי היום"})
     assert sent == []
 
@@ -396,6 +398,8 @@ def test_confirming_late_executes_and_records_it(client, db):
     assert res.status_code == 201
     assert "נמחק" in res.json()["reply"]
     assert res.json()["channel"] == "screen"
+    # ⚠️ המחיקה קרתה בעסקה של הנתיב; בלי זה השורה חוזרת מהמטמון של הסשן
+    db.expire_all()
     assert db.get(Task, doomed.id) is None
     assert client.get("/api/whatsapp/pending").json() == []
 
@@ -422,6 +426,7 @@ def test_dismissing_removes_without_executing(client, db):
     row = stale(db, doomed)
     assert client.post(f"/api/whatsapp/pending/{row.id}/dismiss").status_code == 200
     assert client.get("/api/whatsapp/pending").json() == []
+    db.expire_all()
     assert db.get(Task, doomed.id) is not None, "«הסר» ביצע את הפעולה"
 
 
