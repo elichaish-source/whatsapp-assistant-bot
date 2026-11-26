@@ -34,8 +34,9 @@ export interface Project {
 
 export type Priority = "today" | "tomorrow" | "week" | "later";
 
-// מאיפה המשימה הגיעה. email ו-claude שמורים לאינטגרציות הבאות
-export type TaskSource = "whatsapp" | "dashboard" | "email" | "claude";
+// מאיפה המשימה הגיעה. ⚠️ `screen` הוא הצ'אט שבמסך הוואטסאפ — אותו בוט
+// ואותן פעולות, רק לא מהטלפון; `dashboard` הוא מה שנוצר בטופס
+export type TaskSource = "whatsapp" | "screen" | "dashboard" | "email" | "claude";
 
 export interface Task {
   id: number;
@@ -64,6 +65,9 @@ export const PRIORITY_LABELS: Record<Priority, string> = {
 // אייקון בלבד בשורת המשימה. השם המלא יושב ב-title, ונקרא במרחף ובקורא מסך
 export const SOURCE_ICONS: Record<TaskSource, string> = {
   whatsapp: "💬",
+  // ⚠️ אייקון משלו ולא זה של וואטסאפ: אחרת אי אפשר לדעת מאיפה היא הגיעה,
+  // וזה בדיוק מה שהשדה נועד לענות עליו
+  screen: "🗨️",
   dashboard: "🖥️",
   email: "✉️",
   claude: "✨",
@@ -71,6 +75,7 @@ export const SOURCE_ICONS: Record<TaskSource, string> = {
 
 export const SOURCE_LABELS: Record<TaskSource, string> = {
   whatsapp: "מוואטסאפ",
+  screen: "מהצ׳אט במסך",
   dashboard: "נוצרה מהמערכת",
   email: "מהמייל",
   claude: "מקלוד",

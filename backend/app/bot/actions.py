@@ -55,6 +55,11 @@ HISTORY_LINE_CHARS = 200
 WHATSAPP = "whatsapp"
 SCREEN = "screen"
 
+# ‏``tasks.source`` לפי הערוץ שבו נכתבה ההודעה. ⚠️ **מיפוי מפורש ולא
+# שימוש ישיר בשם הערוץ**: ``source`` מוגבל ב-CHECK במסד, וערוץ חדש
+# שיתווסף פעם היה הופך כל יצירת משימה לשגיאה במקום לאייקון לא מדויק.
+TASK_SOURCE = {WHATSAPP: "whatsapp", SCREEN: "screen"}
+
 
 def local_tz() -> ZoneInfo:
     return ZoneInfo(get_settings().timezone)
@@ -259,7 +264,7 @@ def _parse_reminder(value: str | None) -> datetime | None:
     return parsed
 
 
-def _add_task(db: Session, intent: Intent) -> Outcome:
+def _add_task(db: Session, intent: Intent, channel: str = WHATSAPP) -> Outcome:
     if not intent.title:
         return Outcome("לא הבנתי מה המשימה. אפשר לנסח שוב?")
 
@@ -284,7 +289,9 @@ def _add_task(db: Session, intent: Intent) -> Outcome:
         return Outcome(f"לא שמרתי: {exc.detail}")
 
     data.pop("status", None)
-    task = Task(**data, status="open", source="whatsapp")
+    # ⚠️ הערוץ שבו נכתבה ההודעה, ולא "whatsapp" קבוע: השדה הזה עונה
+    # על "מאיפה זה הגיע", ומשימה שנוצרה מול המסך לא הגיעה מהטלפון
+    task = Task(**data, status="open", source=TASK_SOURCE.get(channel, "whatsapp"))
     timeframe.set_priority(task, task.priority)
     db.add(task)
     db.commit()
@@ -1182,7 +1189,7 @@ def execute(
 
         return getattr(events, intent.action)(db, intent)
     if intent.action == "add_task":
-        return _add_task(db, intent)
+        return _add_task(db, intent, channel)
     if intent.action == "add_recurring":
         return _add_recurring(db, intent)
     if intent.action == "complete_task":

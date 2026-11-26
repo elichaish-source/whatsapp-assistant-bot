@@ -117,6 +117,50 @@ def test_an_email_number_resolves_against_the_same_channel_only(db):
     assert emails._resolve(db, 1, "screen") == "gid-screen"
 
 
+# --- המקור של המשימה ---
+
+
+def test_a_task_from_the_screen_is_marked_as_coming_from_the_screen(db):
+    """⚠️ ``source`` עונה על "מאיפה זה הגיע", ומשימה שנוצרה מול המסך
+    לא הגיעה מהטלפון. עד התיקון היא נרשמה כ-``whatsapp``."""
+    actions.execute(
+        db, Intent(action="add_task", title="נוצרה מהמסך"), None, actions.SCREEN
+    )
+    row = db.scalars(select(Task).where(Task.title == "נוצרה מהמסך")).one()
+    assert row.source == "screen"
+
+
+def test_a_task_from_whatsapp_keeps_its_source(db):
+    """⚠️ מה שעבד עד היום אינו משתנה בשקט."""
+    actions.execute(
+        db, Intent(action="add_task", title="נוצרה בוואטסאפ"), None, actions.WHATSAPP
+    )
+    row = db.scalars(select(Task).where(Task.title == "נוצרה בוואטסאפ")).one()
+    assert row.source == "whatsapp"
+
+
+def test_every_channel_maps_to_a_source_the_database_accepts(db):
+    """⚠️⚠️ ``source`` מוגבל ב-CHECK במסד.
+
+    ערוץ חדש שיתווסף בלי מיפוי היה הופך **כל יצירת משימה** בערוץ הזה
+    לשגיאה, ולא לאייקון לא מדויק. לכן המיפוי מכסה את כל הערוצים, וכל
+    ערך בו נבדק מול המסד.
+    """
+    assert set(actions.TASK_SOURCE) == {actions.WHATSAPP, actions.SCREEN}
+    for index, source in enumerate(actions.TASK_SOURCE.values()):
+        db.add(Task(title=f"בדיקת מקור {index}", status="open", source=source))
+    db.commit()
+
+
+def test_the_schema_doc_knows_the_new_source():
+    """⚠️ ``SCHEMA_DOC`` הוא טקסט חופשי שהמודל כותב לפיו שאילתות, והוא
+    התיישן כבר פעם אחת בלי ששום בדיקה נשברה."""
+    from app import queries
+
+    assert "'screen'" in queries.SCHEMA_DOC
+    assert "screen" in queries.LABELS["source"]
+
+
 # --- אישור מול הערוץ הנכון ---
 
 

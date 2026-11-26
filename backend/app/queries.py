@@ -81,7 +81,7 @@ SCHEMA_DOC = """מבנה הטבלאות לשאילתות:
 - tasks: id, title, status ('open'/'done'), done_at, domain_id, task_type_id,
   client_id, project_id, due_date, reminder_at,
   priority ('today'/'tomorrow'/'week'/'later'), notes,
-  source ('whatsapp'/'dashboard'/'email'/'claude'), recurrence_id, created_at
+  source ('whatsapp'/'screen'/'dashboard'/'email'/'claude'), recurrence_id, created_at
 - clients: id, name, phone, email, tax_id, address, notes, is_active, created_at
 - projects: id, name, domain_id, client_id, description, due_date,
   status ('active'/'done'), created_at
@@ -159,6 +159,7 @@ LABELS: dict[str, dict[str, str]] = {
     "status": {"open": "פתוח", "done": "הסתיים", "active": "פעיל"},
     "source": {
         "whatsapp": "מוואטסאפ",
+        "screen": "מהצ׳אט במסך",
         "dashboard": "מהמערכת",
         "email": "מהמייל",
         "claude": "מקלוד",

@@ -111,8 +111,12 @@ class Task(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("status IN ('open', 'done')", name="task_status"),
         CheckConstraint("priority IN ('today', 'tomorrow', 'week', 'later')", name="task_priority"),
+        # ⚠️ ``screen`` הוא הצ'אט שבמסך הוואטסאפ, ולא הדשבורד: המשימה
+        # נוצרה מתוך שיחה עם הבוט, רק לא מהטלפון. ``dashboard`` נשאר
+        # מה שנוצר בטופס
         CheckConstraint(
-            "source IN ('whatsapp', 'dashboard', 'email', 'claude')", name="task_source"
+            "source IN ('whatsapp', 'screen', 'dashboard', 'email', 'claude')",
+            name="task_source",
         ),
     )
 
